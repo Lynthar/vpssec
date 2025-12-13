@@ -1,0 +1,434 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# vpssec - VPS Security Check & Hardening Tool
+#
+# A security audit and hardening tool for VPS environments
+# Supports Debian 12/13 and Ubuntu 22.04/24.04
+#
+# Usage:
+#   vpssec audit [options]    - Read-only security check
+#   vpssec guide [options]    - Interactive hardening wizard
+#   vpssec rollback [backup]  - Rollback previous changes
+#   vpssec status             - Show current status
+#
+# Copyright (c) 2024
+# ==============================================================================
+
+set -euo pipefail
+
+# VPSSEC_ROOT is computed in core/common.sh (relative to common.sh's
+# own path) immediately after the first source below. We previously
+# also computed it here in the entrypoint; both paths produced the
+# same value for the standard layout, but that was a silent
+# coincidence — any future relocation of either file would have made
+# the two definitions drift. The entrypoint-side computation has been
+# removed; we bootstrap the first source via BASH_SOURCE directly.
+
+# ==============================================================================
+# Source Core Modules
+# ==============================================================================
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/core/common.sh"
+source "${VPSSEC_ROOT}/core/distro.sh"
+source "${VPSSEC_ROOT}/core/state.sh"
+source "${VPSSEC_ROOT}/core/report.sh"
+source "${VPSSEC_ROOT}/core/ui_tui.sh"
+source "${VPSSEC_ROOT}/core/ui_text.sh"
+source "${VPSSEC_ROOT}/core/engine.sh"
+source "${VPSSEC_ROOT}/core/help.sh"
+
+# ==============================================================================
+# CLI Argument Parsing
+# ==============================================================================
+
+show_help() {
+    cat <<EOF
+$(i18n 'cli.usage')
+
+$(i18n 'cli.commands')
+  $(i18n 'cli.cmd_audit')
+  $(i18n 'cli.cmd_guide')
+  $(i18n 'cli.cmd_rollback')
+  $(i18n 'cli.cmd_status')
+  $(i18n 'cli.cmd_help')
+
+$(i18n 'cli.options')
+  $(i18n 'cli.opt_lang')
+  $(i18n 'cli.opt_no_color')
+  $(i18n 'cli.opt_json_only')
+  $(i18n 'cli.opt_yes')
+  $(i18n 'cli.opt_strict')
+  $(i18n 'cli.opt_debug')
+  $(i18n 'cli.opt_include')
+  $(i18n 'cli.opt_exclude')
+  $(i18n 'cli.opt_help')
+  $(i18n 'cli.opt_version')
+
+Examples:
+  vpssec audit                     # Run security audit (all modules)
+  vpssec audit --json-only         # Output JSON only
+  vpssec audit --include=ssh,ufw   # Only SSH and UFW modules
+  vpssec guide                     # Interactive hardening
+  vpssec rollback                  # Rollback last changes
+
+EOF
+}
+
+show_version() {
+    echo "vpssec version ${VPSSEC_VERSION}"
+}
+
+parse_args() {
+    local command=""
+    local include=""
+    local exclude=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            audit|guide|rollback|status)
+                command="$1"
+                shift
+                # For `rollback`, accept an optional positional timestamp
+                # immediately after the sub-command so the loop doesn't
+                # reject it as an unknown option. We only consume it
+                # here; the parent already captured the value in the
+                # pre-parse loop, because variables set inside this
+                # function (called via $(...)) do not propagate back.
+                if [[ "$command" == "rollback" && $# -gt 0 && "$1" != -* ]]; then
+                    shift
+                fi
+                ;;
+            --lang=*)
+                VPSSEC_LANG="${1#*=}"
+                VPSSEC_LANG_SET=1
+                export VPSSEC_LANG VPSSEC_LANG_SET
+                shift
+                ;;
+            --no-color)
+                VPSSEC_COLOR=0
+                # Reset color variables
+                RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN='' WHITE='' BOLD='' DIM='' NC=''
+                shift
+                ;;
+            --json-only)
+                VPSSEC_JSON_ONLY=1
+                shift
+                ;;
+            --yes|-y)
+                VPSSEC_YES=1
+                shift
+                ;;
+            --include=*)
+                include="${1#*=}"
+                shift
+                ;;
+            --exclude=*)
+                exclude="${1#*=}"
+                shift
+                ;;
+            --debug)
+                VPSSEC_DEBUG=1
+                shift
+                ;;
+            --strict)
+                # Strict scoring: count the `optional`-category checks (weak
+                # SSH algorithms, weak SGID, nginx DoS hardening, ...) toward
+                # the score. (This pass runs in a $(...) subshell so the
+                # export happens in the parent-shell pass below; the case here
+                # just keeps --strict from hitting the unknown-option error.)
+                VPSSEC_SECURITY_LEVEL=strict
+                shift
+                ;;
+            --help|-h)
+                # Need to init i18n first for help
+                vpssec_init
+                show_help
+                exit 0
+                ;;
+            --version|-v)
+                show_version
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1"
+                echo "Use --help for usage information"
+                exit 1
+                ;;
+        esac
+    done
+
+    # Use VPSSEC_MODE if set by menu, otherwise default to audit
+    command="${command:-${VPSSEC_MODE:-audit}}"
+
+    # Merge CLI include with menu selection
+    if [[ -n "$include" ]]; then
+        export VPSSEC_INCLUDE="$include"
+    fi
+    export VPSSEC_EXCLUDE="$exclude"
+
+    echo "$command"
+}
+
+# ==============================================================================
+# Main Entry Point
+# ==============================================================================
+
+main() {
+    # Two-pass argument processing.
+    #
+    # Pass 1 collects flags that affect *display* (language, colour,
+    # include filter) and the chosen command/topic. Pass 2 dispatches
+    # terminal subcommands (--help, --version, help) and validates
+    # the result. Splitting it this way fixes a long-standing
+    # order-sensitivity bug: previously a single forward pass exited
+    # on `--help` / `help` *before* a later `--lang=` was seen, so
+    # `vpssec help --lang=en_US` printed Chinese. Now flag order
+    # doesn't matter.
+    #
+    # Variables set inside parse_args (via $(...)) don't propagate
+    # back, so anything that needs to survive must be set here.
+    local _argc=$#
+    local _argv=("$@")
+    local _i
+
+    # ---- Pass 1: collect display flags + detect mode/topic ----
+    local _help_topic=""
+    local _help_requested=0
+    local _version_requested=0
+    for ((_i=0; _i<_argc; _i++)); do
+        local arg="${_argv[$_i]}"
+        case "$arg" in
+            --version|-v)
+                _version_requested=1
+                ;;
+            --help|-h)
+                _help_requested=1
+                ;;
+            --no-color)
+                # common.sh initialised colour escape codes at source
+                # time based on VPSSEC_COLOR and isatty. `--no-color`
+                # was only handled later in parse_args, which runs in
+                # a command-substitution subshell and can't propagate
+                # variable changes back — so the language/mode/module
+                # menus still printed in colour. Reset here before
+                # any menu runs.
+                VPSSEC_COLOR=0
+                RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN='' WHITE='' BOLD='' DIM='' NC=''
+                SEV_HIGH='●' SEV_MEDIUM='●' SEV_LOW='●' SEV_SAFE='●'
+                ;;
+            --lang=*)
+                VPSSEC_LANG="${arg#*=}"
+                VPSSEC_LANG_SET=1
+                export VPSSEC_LANG VPSSEC_LANG_SET
+                ;;
+            --include=*)
+                VPSSEC_INCLUDE="${arg#*=}"
+                export VPSSEC_INCLUDE
+                ;;
+            --exclude=*)
+                VPSSEC_EXCLUDE="${arg#*=}"
+                export VPSSEC_EXCLUDE
+                ;;
+            --json-only)
+                # Behaviour flags must be collected in this parent-shell
+                # pass too. parse_args() runs in a $(...) subshell, so the
+                # assignments it makes for --json-only/--yes/--exclude/--debug
+                # never propagate back — without this they were silent no-ops.
+                VPSSEC_JSON_ONLY=1
+                export VPSSEC_JSON_ONLY
+                ;;
+            --yes|-y)
+                VPSSEC_YES=1
+                export VPSSEC_YES
+                ;;
+            --debug)
+                VPSSEC_DEBUG=1
+                export VPSSEC_DEBUG
+                ;;
+            --strict)
+                # Parent-shell pass: export so modules' _check_counts_in_score
+                # (which reads ${VPSSEC_SECURITY_LEVEL:-standard}) sees it and
+                # counts optional-category checks toward the score.
+                VPSSEC_SECURITY_LEVEL=strict
+                export VPSSEC_SECURITY_LEVEL
+                ;;
+            audit|guide|rollback|status)
+                VPSSEC_MODE="$arg"
+                VPSSEC_MODE_SET=1
+                export VPSSEC_MODE VPSSEC_MODE_SET
+                # For `rollback`, the next positional (if any, and not a
+                # flag) is the backup timestamp. Capturing it here (not
+                # in parse_args) is order-insensitive: `vpssec --yes
+                # rollback TS` works.
+                if [[ "$arg" == "rollback" ]]; then
+                    local _next_i=$((_i + 1))
+                    if (( _next_i < _argc )); then
+                        local _next="${_argv[$_next_i]}"
+                        if [[ -n "$_next" && "$_next" != -* ]]; then
+                            VPSSEC_ROLLBACK_TIMESTAMP="$_next"
+                            export VPSSEC_ROLLBACK_TIMESTAMP
+                        fi
+                    fi
+                fi
+                ;;
+            help)
+                _help_requested=1
+                # Capture optional positional <module> as the topic.
+                # Same one-step lookahead as `rollback`'s timestamp.
+                local _next_i=$((_i + 1))
+                if (( _next_i < _argc )); then
+                    local _next="${_argv[$_next_i]}"
+                    if [[ -n "$_next" && "$_next" != -* ]]; then
+                        _help_topic="$_next"
+                    fi
+                fi
+                ;;
+        esac
+    done
+
+    # ---- Pass 2: dispatch terminal sub-commands ----
+    # `--version` is information-only; goes first because it doesn't
+    # need i18n. `help` and `--help` BOTH route through the help
+    # path; the only difference is `_help_topic` (empty for `--help`).
+    if (( _version_requested )); then
+        show_version
+        exit 0
+    fi
+    if (( _help_requested )); then
+        i18n_load "${VPSSEC_LANG}"
+        if [[ -n "$_help_topic" ]]; then
+            vpssec_help_dispatch "$_help_topic"
+            exit $?
+        else
+            # `vpssec help` (no module) and `vpssec --help` deliberately
+            # render different things: --help is the CLI option summary
+            # users expect from any UNIX tool, while `help` is the
+            # module/fix overview. Disambiguate by which arg arrived.
+            local saw_help_subcommand=0
+            for ((_i=0; _i<_argc; _i++)); do
+                [[ "${_argv[$_i]}" == "help" ]] && { saw_help_subcommand=1; break; }
+            done
+            if (( saw_help_subcommand )); then
+                vpssec_help_dispatch ""
+            else
+                show_help
+            fi
+            exit 0
+        fi
+    fi
+
+    # If the user passed a non-status command on the CLI, fail fast on
+    # missing root before we walk any menus. Previously the check
+    # happened after language/mode/module selection, so a non-root
+    # user went through the entire interactive flow and only then saw
+    # "root required". The second check below handles the fully
+    # interactive path where the command is only known after select_mode.
+    if [[ -n "${VPSSEC_MODE:-}" && "$VPSSEC_MODE" != "status" ]] && ! check_root; then
+        i18n_load "${VPSSEC_LANG}" 2>/dev/null || true
+        print_error "$(i18n 'error.root_required' 2>/dev/null || echo 'This operation requires root privileges')"
+        echo "Please run with: sudo vpssec $VPSSEC_MODE"
+        exit 1
+    fi
+
+    # Show language selection if not specified
+    select_language
+
+    # Show mode selection if not specified (only for audit/guide, not rollback/status)
+    select_mode
+
+    # Interactive path: the command is now known — enforce root before
+    # we display the module menu so the user doesn't pick modules only
+    # to be rejected.
+    if [[ "${VPSSEC_MODE:-}" != "status" ]] && ! check_root; then
+        i18n_load "${VPSSEC_LANG}" 2>/dev/null || true
+        print_error "$(i18n 'error.root_required' 2>/dev/null || echo 'This operation requires root privileges')"
+        echo "Please run with: sudo vpssec ${VPSSEC_MODE:-}"
+        exit 1
+    fi
+
+    # Guide/fix is apt/dpkg-based and only supported on Debian/Ubuntu.
+    # Reject here — before the module menu — so a RHEL/Arch user isn't
+    # walked through module selection only to be turned away. The audit
+    # path is distro-aware and still works; guide_mode keeps its own
+    # is_debian_based gate as defence in depth.
+    if [[ "${VPSSEC_MODE:-}" == "guide" ]] && ! is_debian_based; then
+        i18n_load "${VPSSEC_LANG}" 2>/dev/null || true
+        print_warn "$(i18n 'guide.fix_debian_only')"
+        exit 0
+    fi
+
+    # Show module selection if not specified via CLI
+    select_modules
+
+    # Parse command line arguments (will use VPSSEC_MODE if set)
+    local command=$(parse_args "$@")
+
+    # Initialize vpssec
+    vpssec_init
+
+    # Defence in depth: re-check in case the command evolved after
+    # parse_args (e.g. defaulted from VPSSEC_MODE). check_root is a
+    # cheap syscall so the redundancy is fine.
+    if [[ "$command" != "status" ]] && ! check_root; then
+        print_error "$(i18n 'error.root_required')"
+        echo "Please run with: sudo vpssec $command"
+        exit 1
+    fi
+
+    # Check OS support
+    if ! is_supported_os; then
+        local os=$(detect_os)
+        local version=$(detect_os_version)
+        print_warn "$(i18n 'error.unsupported_os' "os=${os} ${version}")"
+        print_msg "Supported (audit): Debian 12/13, Ubuntu 22.04/24.04/26.04, RHEL 8/9/10 family (Rocky/Alma/CentOS Stream), Arch. Automated fixes (guide): Debian/Ubuntu only."
+        print_msg ""
+
+        if [[ "$command" != "status" ]] && ! confirm "Continue anyway?" "n"; then
+            exit 1
+        fi
+    fi
+
+    # Check required dependencies
+    local missing_deps=$(check_required_deps 2>&1) || true
+    if [[ -n "$missing_deps" ]]; then
+        print_error "$(i18n 'preflight.dep_missing' "dep=$missing_deps")"
+        echo "Install with: apt install $missing_deps"
+        exit 1
+    fi
+
+    # Detect TUI backend
+    tui_detect_backend || true
+
+    # Load modules
+    module_load_all "${VPSSEC_INCLUDE:-}" "${VPSSEC_EXCLUDE:-}"
+
+    # Execute command
+    case "$command" in
+        audit)
+            print_header "vpssec - VPS Security Audit"
+            print_msg "Version: ${VPSSEC_VERSION}"
+            print_msg "Date: $(date '+%Y-%m-%d %H:%M:%S')"
+            print_msg "OS: $(detect_os) $(detect_os_version)"
+            if [[ -n "${VPSSEC_INCLUDE:-}" ]]; then
+                print_msg "Modules: ${VPSSEC_INCLUDE}"
+            fi
+            audit_all
+            ;;
+        guide)
+            guide_mode
+            ;;
+        rollback)
+            rollback_mode "${VPSSEC_ROLLBACK_TIMESTAMP:-}"
+            ;;
+        status)
+            status_mode
+            ;;
+        *)
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function
+main "$@"

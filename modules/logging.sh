@@ -1,0 +1,587 @@
+#!/usr/bin/env bash
+# vpssec - VPS Security Check & Hardening Tool
+# Logging and audit module
+# Copyright (c) 2024
+
+# ==============================================================================
+# Logging Configuration
+# ==============================================================================
+
+JOURNALD_CONF="/etc/systemd/journald.conf"
+JOURNALD_CONF_D="/etc/systemd/journald.conf.d"
+LOGROTATE_CONF="/etc/logrotate.conf"
+LOGROTATE_D="/etc/logrotate.d"
+RSYSLOG_CONF="/etc/rsyslog.conf"
+AUDIT_RULES_D="/etc/audit/rules.d"
+
+# ==============================================================================
+# Logging Helper Functions
+# ==============================================================================
+
+_logging_journald_persistent() {
+    # Check if journal is configured for persistent storage
+    if [[ -d "/var/log/journal" ]]; then
+        return 0
+    fi
+
+    if grep -qE "^Storage=persistent" "$JOURNALD_CONF" 2>/dev/null; then
+        return 0
+    fi
+
+    if [[ -d "$JOURNALD_CONF_D" ]]; then
+        if grep -rqE "^Storage=persistent" "$JOURNALD_CONF_D" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Pure-data variant for tests. Argument is the merged journald config
+# text. Echoes the last SystemMaxUse= value found, or empty.
+_logging_journald_max_size_from_text() {
+    awk -F= '
+        /^SystemMaxUse=/ {
+            gsub(/[[:space:]]/, "", $2)
+            v = $2
+        }
+        END { if (v != "") print v }
+    ' <<<"$1"
+}
+
+# Last definition wins across main + drop-in files (matches systemd
+# semantics). Original implementation read only the main file, so
+# vpssec writing its own drop-in via _logging_fix_enable_persistent_journal
+# became invisible to the next audit — self-inconsistent display.
+_logging_journald_max_size() {
+    local size=""
+    if command -v systemd-analyze >/dev/null 2>&1; then
+        local merged
+        merged=$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null)
+        size=$(_logging_journald_max_size_from_text "$merged")
+    fi
+    if [[ -z "$size" ]]; then
+        # Fallback: manually read main + drop-ins (alphabetical, last wins).
+        local f text=""
+        for f in "$JOURNALD_CONF" "$JOURNALD_CONF_D"/*.conf; do
+            [[ -f "$f" ]] || continue
+            text="${text}$(cat "$f" 2>/dev/null)
+"
+        done
+        size=$(_logging_journald_max_size_from_text "$text")
+    fi
+    echo "${size:-auto}"
+}
+
+_logging_check_logrotate() {
+    # Check if logrotate is installed and configured
+    check_command logrotate && [[ -f "$LOGROTATE_CONF" ]]
+}
+
+_logging_check_audit_installed() {
+    check_command auditd && check_command auditctl
+}
+
+_logging_check_audit_rules() {
+    if [[ -d "$AUDIT_RULES_D" ]]; then
+        local rule_count=$(find "$AUDIT_RULES_D" -name "*.rules" -type f 2>/dev/null | wc -l)
+        [[ "$rule_count" -gt 0 ]]
+    else
+        return 1
+    fi
+}
+
+_logging_get_failed_logins() {
+    # Get recent failed login attempts.
+    #
+    # Filter by `_COMM=sshd` (the binary name as recorded by the
+    # kernel), not `_SYSTEMD_UNIT=sshd.service`. The latter is the
+    # canonical RHEL/CentOS unit name; on Debian/Ubuntu — every OS
+    # this project targets — the unit is `ssh.service` and
+    # `sshd.service` is only a systemd alias that may not match
+    # journal-recorded metadata. With the wrong filter this query
+    # silently returned zero on every Debian/Ubuntu host, hiding
+    # active brute-force activity.
+    #
+    # Match BOTH _COMM=sshd and _COMM=sshd-session. OpenSSH >= 9.8 (Debian 13,
+    # Ubuntu 24.10+) split per-session work — including the authentication
+    # failure log lines — into a separate `sshd-session` process, so filtering
+    # on `_COMM=sshd` alone returns zero even during an active brute-force (this
+    # is the same change fail2ban had to make). journalctl ORs repeated matches
+    # of the same field, so listing both COMM values is the correct union.
+    #
+    # Note: grep -c outputs "0" AND exits with code 1 when no matches.
+    # Using || true prevents double output from || echo "0".
+    local count
+    count=$(journalctl _COMM=sshd _COMM=sshd-session --since "24 hours ago" 2>/dev/null | \
+        grep -c "Failed password\|authentication failure" 2>/dev/null) || true
+    echo "${count:-0}"
+}
+
+_logging_get_sudo_events() {
+    # Get recent sudo events. `wc -l` prints "0" on empty input, but
+    # under `set -o pipefail` a journalctl failure still trips the
+    # pipe to non-zero, so swallow the exit code with `|| true` rather
+    # than appending a second "0" via `|| echo "0"` (see _logging_get_failed_logins
+    # above for the same idiom).
+    local count
+    count=$(journalctl _COMM=sudo --since "24 hours ago" 2>/dev/null | wc -l) || true
+    echo "${count:-0}"
+}
+
+# ==============================================================================
+# Logging Audit
+# ==============================================================================
+
+logging_audit() {
+    local module="logging"
+
+    # Check journald persistence
+    print_item "$(i18n 'logging.check_journald')"
+    _logging_audit_journald
+
+    # Check logrotate
+    print_item "$(i18n 'logging.check_logrotate')"
+    _logging_audit_logrotate
+
+    # Check audit system
+    print_item "$(i18n 'logging.check_auditd')"
+    _logging_audit_auditd
+
+    # Check SSH logs
+    print_item "$(i18n 'logging.check_ssh_logs')"
+    _logging_audit_ssh_logs
+
+    # Check sudo logging
+    print_item "$(i18n 'logging.check_sudo_logs')"
+    _logging_audit_sudo_logs
+}
+
+_logging_audit_journald() {
+    if _logging_journald_persistent; then
+        local max_size=$(_logging_journald_max_size)
+        local check=$(create_check_json \
+            "logging.journald_persistent" \
+            "logging" \
+            "low" \
+            "passed" \
+            "$(i18n 'logging.journald_persistent')" \
+            "$(i18n 'logging.journald_max_size' "size=$max_size")" \
+            "" \
+            "")
+        state_add_check "$check"
+        print_ok "$(i18n 'logging.journald_persistent') ($(i18n 'logging.journald_max_size' "size=$max_size"))"
+    else
+        local check=$(create_check_json \
+            "logging.journald_volatile" \
+            "logging" \
+            "low" \
+            "failed" \
+            "$(i18n 'logging.journald_volatile')" \
+            "$(i18n 'logging.journald_volatile_desc')" \
+            "$(i18n 'logging.fix_enable_persistent')" \
+            "logging.enable_persistent_journal")
+        state_add_check "$check"
+        print_severity "low" "$(i18n 'logging.journald_volatile')"
+    fi
+}
+
+_logging_audit_logrotate() {
+    if _logging_check_logrotate; then
+        # Check if critical log files have rotation configured
+        local missing=()
+
+        # Critical log files to check, per distro (from distro.sh). Defaults to
+        # the Debian set; on Debian/Ubuntu distro_log_paths returns exactly this,
+        # so behaviour is unchanged. RHEL→messages/secure/dnf.rpm.log,
+        # Arch→pacman.log (everything else is journald-only there).
+        local logs="syslog auth.log dpkg.log"
+        if declare -f distro_log_paths >/dev/null 2>&1; then
+            local dl; dl=$(distro_log_paths)
+            if [[ -n "$dl" ]]; then logs="$dl"; fi
+        fi
+
+        for log in $logs; do
+            # Search BOTH /etc/logrotate.conf and /etc/logrotate.d: many
+            # distros configure core logs (wtmp/btmp, and on some setups
+            # syslog) directly in logrotate.conf, so searching only the .d
+            # directory falsely reported rotation as missing.
+            if [[ -f "/var/log/$log" ]] && ! grep -rq "$log" "$LOGROTATE_CONF" "$LOGROTATE_D" 2>/dev/null; then
+                missing+=("$log")
+            fi
+        done
+
+        if [[ ${#missing[@]} -eq 0 ]]; then
+            local check=$(create_check_json \
+                "logging.logrotate_ok" \
+                "logging" \
+                "low" \
+                "passed" \
+                "$(i18n 'logging.logrotate_ok')" \
+                "" \
+                "" \
+                "")
+            state_add_check "$check"
+            print_ok "$(i18n 'logging.logrotate_ok')"
+        else
+            local check=$(create_check_json \
+                "logging.logrotate_missing" \
+                "logging" \
+                "low" \
+                "failed" \
+                "$(i18n 'logging.logrotate_some_missing' "logs=${missing[*]}")" \
+                "$(i18n 'logging.logrotate_missing_desc')" \
+                "$(i18n 'logging.fix_configure_logrotate')" \
+                "")
+            state_add_check "$check"
+            print_severity "low" "$(i18n 'logging.logrotate_some_missing' "logs=${missing[*]}")"
+        fi
+    else
+        local check=$(create_check_json \
+            "logging.logrotate_not_configured" \
+            "logging" \
+            "low" \
+            "failed" \
+            "$(i18n 'logging.logrotate_missing')" \
+            "$(i18n 'logging.logrotate_missing_desc')" \
+            "$(i18n 'logging.fix_configure_logrotate')" \
+            "logging.setup_logrotate")
+        state_add_check "$check"
+        print_severity "low" "$(i18n 'logging.logrotate_missing')"
+    fi
+}
+
+_logging_audit_auditd() {
+    if _logging_check_audit_installed; then
+        if systemctl is-active --quiet auditd; then
+            if _logging_check_audit_rules; then
+                local check=$(create_check_json \
+                    "logging.auditd_configured" \
+                    "logging" \
+                    "low" \
+                    "passed" \
+                    "$(i18n 'logging.auditd_running')" \
+                    "" \
+                    "" \
+                    "")
+                state_add_check "$check"
+                print_ok "$(i18n 'logging.auditd_running')"
+            else
+                local check=$(create_check_json \
+                    "logging.auditd_no_rules" \
+                    "logging" \
+                    "low" \
+                    "failed" \
+                    "$(i18n 'logging.auditd_no_rules')" \
+                    "$(i18n 'logging.auditd_no_rules_desc')" \
+                    "$(i18n 'logging.fix_configure_auditd')" \
+                    "logging.setup_audit_rules")
+                state_add_check "$check"
+                print_severity "low" "$(i18n 'logging.auditd_no_rules')"
+            fi
+        else
+            local check=$(create_check_json \
+                "logging.auditd_inactive" \
+                "logging" \
+                "low" \
+                "failed" \
+                "$(i18n 'logging.auditd_not_running')" \
+                "$(i18n 'logging.auditd_not_running_desc')" \
+                "$(i18n 'logging.fix_enable_auditd')" \
+                "logging.enable_auditd")
+            state_add_check "$check"
+            print_severity "low" "$(i18n 'logging.auditd_not_running')"
+        fi
+    else
+        local check=$(create_check_json \
+            "logging.auditd_not_installed" \
+            "logging" \
+            "low" \
+            "failed" \
+            "$(i18n 'logging.auditd_not_installed')" \
+            "$(i18n 'logging.auditd_not_running_desc')" \
+            "$(i18n 'logging.fix_install_auditd')" \
+            "logging.install_auditd")
+        state_add_check "$check"
+        print_severity "low" "$(i18n 'logging.auditd_not_installed')"
+    fi
+}
+
+_logging_audit_ssh_logs() {
+    local failed_logins=$(_logging_get_failed_logins)
+
+    if ((failed_logins > 100)); then
+        local check=$(create_check_json \
+            "logging.ssh_many_failures" \
+            "logging" \
+            "low" \
+            "failed" \
+            "$(i18n 'logging.ssh_logs_warning')" \
+            "$(i18n 'logging.ssh_logs_warning_desc' "count=$failed_logins")" \
+            "" \
+            "")
+        state_add_check "$check"
+        print_severity "low" "$(i18n 'logging.ssh_logs_high' "count=$failed_logins")"
+    elif ((failed_logins > 20)); then
+        local check=$(create_check_json \
+            "logging.ssh_some_failures" \
+            "logging" \
+            "low" \
+            "failed" \
+            "$(i18n 'logging.ssh_logs_moderate' "count=$failed_logins")" \
+            "$(i18n 'logging.ssh_logs_warning_desc' "count=$failed_logins")" \
+            "" \
+            "")
+        state_add_check "$check"
+        print_severity "low" "$(i18n 'logging.ssh_logs_moderate' "count=$failed_logins")"
+    else
+        local check=$(create_check_json \
+            "logging.ssh_logs_ok" \
+            "logging" \
+            "low" \
+            "passed" \
+            "$(i18n 'logging.ssh_logs_normal' "count=$failed_logins")" \
+            "" \
+            "" \
+            "")
+        state_add_check "$check"
+        print_ok "$(i18n 'logging.ssh_logs_normal' "count=$failed_logins")"
+    fi
+}
+
+_logging_audit_sudo_logs() {
+    local sudo_events=$(_logging_get_sudo_events)
+
+    # Just informational - sudo logging should be working
+    if ((sudo_events > 0)); then
+        local check=$(create_check_json \
+            "logging.sudo_logging_ok" \
+            "logging" \
+            "low" \
+            "passed" \
+            "$(i18n 'logging.sudo_logs_active' "count=$sudo_events")" \
+            "" \
+            "" \
+            "")
+        state_add_check "$check"
+        print_ok "$(i18n 'logging.sudo_logs_active' "count=$sudo_events")"
+    else
+        local check=$(create_check_json \
+            "logging.sudo_no_events" \
+            "logging" \
+            "low" \
+            "passed" \
+            "$(i18n 'logging.sudo_no_events')" \
+            "" \
+            "" \
+            "")
+        state_add_check "$check"
+        print_ok "$(i18n 'logging.sudo_no_events')"
+    fi
+}
+
+# ==============================================================================
+# Logging Fix Functions
+# ==============================================================================
+
+logging_fix() {
+    local fix_id="$1"
+
+    case "$fix_id" in
+        logging.enable_persistent_journal)
+            _logging_fix_enable_persistent_journal
+            ;;
+        logging.setup_logrotate)
+            _logging_fix_setup_logrotate
+            ;;
+        logging.install_auditd)
+            _logging_fix_install_auditd
+            ;;
+        logging.enable_auditd)
+            _logging_fix_enable_auditd
+            ;;
+        logging.setup_audit_rules)
+            _logging_fix_setup_audit_rules
+            ;;
+        *)
+            log_warn "Logging fix not implemented: $fix_id"
+            return 1
+            ;;
+    esac
+}
+
+_logging_fix_enable_persistent_journal() {
+    print_info "$(i18n 'logging.enabling_persistent')"
+
+    # Create journal directory
+    mkdir -p /var/log/journal
+    systemd-tmpfiles --create --prefix /var/log/journal
+
+    # Create drop-in configuration atomically; back up any prior drop-in so a
+    # bad restart can be rolled back. A partial file here could degrade
+    # journald on the restart below.
+    mkdir -p "$JOURNALD_CONF_D"
+    [[ -f "${JOURNALD_CONF_D}/99-vpssec.conf" ]] && backup_file "${JOURNALD_CONF_D}/99-vpssec.conf" >/dev/null 2>&1 || true
+    write_file_atomic "${JOURNALD_CONF_D}/99-vpssec.conf" '# vpssec journald configuration
+[Journal]
+Storage=persistent
+Compress=yes
+SystemMaxUse=500M
+SystemMaxFileSize=50M
+MaxRetentionSec=1month'
+
+    # Restart journald
+    systemctl restart systemd-journald
+
+    if _logging_journald_persistent; then
+        print_ok "$(i18n 'logging.persistent_enabled')"
+        return 0
+    else
+        print_error "$(i18n 'logging.persistent_failed')"
+        return 1
+    fi
+}
+
+_logging_fix_setup_logrotate() {
+    print_info "$(i18n 'logging.configuring_logrotate')"
+
+    DEBIAN_FRONTEND=noninteractive apt-get install -y logrotate 2>/dev/null
+
+    # Ensure default config exists
+    if [[ ! -f "$LOGROTATE_CONF" ]]; then
+        cat > "$LOGROTATE_CONF" <<'EOF'
+# vpssec logrotate configuration
+weekly
+rotate 4
+create
+dateext
+compress
+delaycompress
+include /etc/logrotate.d
+EOF
+    fi
+
+    print_ok "$(i18n 'logging.logrotate_configured')"
+    return 0
+}
+
+_logging_fix_install_auditd() {
+    print_info "$(i18n 'logging.installing_auditd')"
+
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y auditd audispd-plugins 2>/dev/null; then
+        print_ok "$(i18n 'logging.auditd_installed')"
+        _logging_fix_enable_auditd
+        _logging_fix_setup_audit_rules
+        return 0
+    else
+        print_error "$(i18n 'logging.auditd_install_failed')"
+        return 1
+    fi
+}
+
+_logging_fix_enable_auditd() {
+    print_info "$(i18n 'logging.enabling_auditd')"
+
+    systemctl enable auditd
+    systemctl start auditd
+
+    if systemctl is-active --quiet auditd; then
+        print_ok "$(i18n 'logging.auditd_service_enabled')"
+        return 0
+    else
+        print_error "$(i18n 'logging.auditd_start_failed')"
+        return 1
+    fi
+}
+
+_logging_fix_setup_audit_rules() {
+    print_info "$(i18n 'logging.configuring_audit_rules')"
+
+    mkdir -p "$AUDIT_RULES_D"
+
+    # Build the rules content, then write atomically (tempfile + rename). The
+    # bare `cat >` could leave a truncated 99-vpssec.rules on an interrupted
+    # write — which auditd would then reject on the next load — and its write
+    # failure went unchecked.
+    local rules_content
+    rules_content=$(cat <<'EOF'
+# vpssec audit rules for security monitoring
+
+# NOTE: intentionally NO `-D` here. augenrules concatenates rules.d/*.rules in
+# lexical order, and this file sorts LAST (99-). A `-D` (delete-all) at the top
+# of the last file wipes every rule loaded from earlier files — including a
+# hand-written 10-*/20-* ruleset and the base audit.rules. The base audit.rules
+# already carries the single `-D` that resets the set at the start of the load,
+# so vpssec's rules are purely additive.
+
+# Set buffer size
+-b 8192
+
+# Failure mode (1=printk, 2=panic)
+-f 1
+
+# Monitor authentication files
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d/ -p wa -k sudoers
+
+# Monitor SSH configuration
+-w /etc/ssh/sshd_config -p wa -k sshd_config
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd_config
+
+# Monitor cron
+-w /etc/crontab -p wa -k cron
+-w /etc/cron.d/ -p wa -k cron
+-w /var/spool/cron/ -p wa -k cron
+
+# Monitor login files
+-w /var/log/lastlog -p wa -k logins
+-w /var/run/faillock/ -p wa -k logins
+
+# Monitor privileged commands
+-a always,exit -F path=/usr/bin/sudo -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/su -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+
+# Monitor kernel module loading
+-w /sbin/insmod -p x -k modules
+-w /sbin/rmmod -p x -k modules
+-w /sbin/modprobe -p x -k modules
+
+# Lock the audit configuration (RECOMMENDED for production / compliance).
+# With -e 2 the rules cannot be modified until the next reboot, which
+# prevents an attacker with root from running `auditctl -D` to erase
+# the forensic trail before tampering. Trade-off: editing /etc/audit
+# rules will also require a reboot. Uncomment this line if your
+# environment can accept that operational cost.
+# -e 2
+EOF
+)
+
+    if ! write_file_atomic "${AUDIT_RULES_D}/99-vpssec.rules" "$rules_content"; then
+        print_error "$(i18n 'logging.audit_rules_failed')"
+        return 1
+    fi
+
+    # Load the rules, then report honestly whether the KERNEL actually took
+    # them (auditctl -l) rather than declaring success merely because the file
+    # exists. augenrules/auditctl can fail (auditd inactive, syntax error,
+    # already immutable via -e 2) while the file sits on disk looking fine.
+    augenrules --load 2>/dev/null || auditctl -R "${AUDIT_RULES_D}/99-vpssec.rules" 2>/dev/null || true
+
+    if auditctl -l 2>/dev/null | grep -q '.'; then
+        print_ok "$(i18n 'logging.audit_rules_configured')"
+        print_info "$(i18n 'logging.audit_immutable_hint')"
+        return 0
+    elif _logging_check_audit_rules; then
+        # File correctly persisted but not live yet (e.g. auditd not running in
+        # this environment); it applies at next auditd start / reboot.
+        print_warn "$(i18n 'logging.audit_rules_pending')"
+        return 0
+    else
+        print_error "$(i18n 'logging.audit_rules_failed')"
+        return 1
+    fi
+}

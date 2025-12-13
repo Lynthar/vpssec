@@ -1,0 +1,342 @@
+#!/bin/bash
+# vpssec - VPS Security Check & Hardening Tool
+# One-line runner with sigstore-verified release:
+#   curl -fsSL https://raw.githubusercontent.com/Lynthar/CloudServer-Audit/main/run.sh | sudo bash
+#
+# Usage:
+#   curl ... | sudo bash                          # interactive (audit/guide menu)
+#   curl ... | sudo bash -s -- audit              # direct audit
+#   curl ... | sudo bash -s -- guide              # direct guide
+#   curl ... | sudo bash -s -- --lang=en_US       # English UI
+#
+# Environment overrides:
+#   VPSSEC_VERSION    pin to a specific release (e.g. "v0.0.9"); default "latest"
+#   VPSSEC_NO_VERIFY  set to 1 to skip cosign verification (NOT recommended)
+
+set -euo pipefail
+
+VPSSEC_REPO="Lynthar/CloudServer-Audit"
+VPSSEC_VERSION="${VPSSEC_VERSION:-latest}"
+VPSSEC_NO_VERIFY="${VPSSEC_NO_VERIFY:-0}"
+# Populated by a root-owned `mktemp -d` in download_and_verify (mode 0700).
+# A predictable /tmp/vpssec-$$ path let a local attacker pre-plant a symlink
+# and win a race against root's curl -o / cd; mktemp picks an unguessable
+# name and fails if it already exists, closing that window.
+VPSSEC_TMP=""
+
+# Sigstore identity check: only signatures issued to THIS repo's
+# release workflow at a v* tag are accepted. The cosign cert embeds
+# the workflow URL + OIDC issuer; cosign verify-blob enforces the
+# match. A compromised upstream cannot forge a passing signature
+# without also compromising sigstore's Fulcio CA + Rekor log.
+COSIGN_IDENTITY_REGEX="^https://github\.com/${VPSSEC_REPO}/\.github/workflows/release\.yml@refs/tags/v.+$"
+COSIGN_OIDC_ISSUER="https://token.actions.githubusercontent.com"
+
+# Pinned cosign for the apt-fallback install path (Debian, etc.). The
+# SHA256 below is verified locally before dpkg ever sees the .deb, so a
+# future compromise of the sigstore release pipeline still can't ship a
+# tampered cosign through this script — the hash check fails first.
+# Bump both VERSION and the per-arch hashes together; the bump workflow
+# at .github/workflows/cosign-bump.yml automates this weekly.
+# cosign v3.x verifies bundles signed by older v2.x cosign (sigstore
+# bundle verification is backwards compatible across majors), so this
+# pin can move independently of release.yml's signer pin.
+COSIGN_PIN_VERSION="3.1.1"
+# .deb assets — Debian/Ubuntu (installed via dpkg)
+COSIGN_PIN_SHA256_AMD64="b62db813c4e1c47580196aa59e90d0938630c9843d6eea8ae2cc03dcefc00709"
+COSIGN_PIN_SHA256_ARM64="972a57a3a2cca9387993571d535ae374efcd0045f017d64be9e88453125d8512"
+# static binaries — RHEL/Arch and any other non-dpkg distro
+COSIGN_PIN_SHA256_BIN_AMD64="ae1ecd212663f3693ad9edf8b1a183900c9a52d3155ba6e354237f9a0f6463fc"
+COSIGN_PIN_SHA256_BIN_ARM64="2ec865872e331c32fd12b08dae15332d3f92c0aa029219589684a4903ca85d11"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+print_banner() {
+    local title="vpssec - VPS Security Check & Hardening"
+    local url="https://github.com/${VPSSEC_REPO}"
+    local width=63
+    echo -e "${BOLD}"
+    printf '╔%s╗\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+    printf '║%*s%s%*s║\n' $(( (width - ${#title}) / 2 )) "" "$title" $(( width - ${#title} - (width - ${#title}) / 2 )) ""
+    printf '║%*s%s%*s║\n' $(( (width - ${#url}) / 2 )) "" "$url" $(( width - ${#url} - (width - ${#url}) / 2 )) ""
+    printf '╚%s╝\n' "$(printf '═%.0s' $(seq 1 "$width"))"
+    echo -e "${NC}"
+}
+
+print_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+print_ok() { echo -e "${GREEN}[OK]${NC} $*"; }
+print_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $*"; }
+
+# Root + basic tools + cosign (unless verification is opted-out). We
+# best-effort `apt install cosign` since Ubuntu 22.04+ ships it in
+# universe. If that's unavailable, install_cosign_pinned() falls back to
+# a pinned, SHA256-verified asset from sigstore's GitHub release — the
+# .deb via dpkg on Debian/Ubuntu, or the static linux binary into
+# /usr/local/bin on RHEL/Arch and other non-dpkg distros. Architectures
+# without a pinned hash still bail with manual-install instructions.
+install_cosign_pinned() {
+    # Fallback used when apt has no cosign package. Resolves uname -m to a
+    # sigstore arch suffix and installs a pinned, SHA256-verified asset
+    # from cosign's GitHub release: the .deb via dpkg on Debian/Ubuntu, or
+    # the static linux binary into /usr/local/bin on RHEL/Arch and any
+    # other non-dpkg distro. The hash is always checked BEFORE the asset
+    # is installed or executed, so a compromised sigstore can't push a
+    # tampered cosign through this script. Returns non-zero on any failure.
+    local arch arch_sfx want_deb_hash want_bin_hash
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  arch_sfx="amd64"; want_deb_hash="$COSIGN_PIN_SHA256_AMD64"; want_bin_hash="$COSIGN_PIN_SHA256_BIN_AMD64" ;;
+        aarch64) arch_sfx="arm64"; want_deb_hash="$COSIGN_PIN_SHA256_ARM64"; want_bin_hash="$COSIGN_PIN_SHA256_BIN_ARM64" ;;
+        *)
+            print_error "No pinned cosign for architecture: $arch"
+            return 1
+            ;;
+    esac
+
+    local base_url="https://github.com/sigstore/cosign/releases/download/v${COSIGN_PIN_VERSION}"
+    print_warn "cosign not in package manager — installing pinned v${COSIGN_PIN_VERSION} from sigstore GitHub release"
+    print_warn "  trust root for cosign shifts from distro archive to github.com (same as run.sh itself)"
+
+    if command -v dpkg &>/dev/null; then
+        # Debian/Ubuntu: pinned .deb. Hash-check before dpkg so a
+        # compromised sigstore can't run a malicious maintainer script.
+        local deb_file="/tmp/cosign_${COSIGN_PIN_VERSION}_${arch_sfx}.$$.deb"
+        if ! curl -fsSL "${base_url}/cosign_${COSIGN_PIN_VERSION}_${arch_sfx}.deb" -o "$deb_file"; then
+            print_error "Download failed: cosign_${COSIGN_PIN_VERSION}_${arch_sfx}.deb"
+            rm -f "$deb_file"
+            return 1
+        fi
+        local got_hash
+        got_hash=$(sha256sum "$deb_file" | awk '{print $1}')
+        if [[ "$got_hash" != "$want_deb_hash" ]]; then
+            print_error "cosign .deb SHA256 mismatch — refusing to install"
+            print_error "  expected: $want_deb_hash"
+            print_error "  got:      $got_hash"
+            rm -f "$deb_file"
+            return 1
+        fi
+        print_ok "cosign .deb hash verified"
+        if ! dpkg -i "$deb_file" >/dev/null 2>&1; then
+            print_error "dpkg -i failed for $deb_file"
+            rm -f "$deb_file"
+            return 1
+        fi
+        rm -f "$deb_file"
+    else
+        # RHEL/Arch / anything without dpkg: pinned static binary. Same
+        # trust trade-off; hash is checked before the file is made
+        # executable or run.
+        local bin_file="/tmp/cosign-linux-${arch_sfx}.$$"
+        if ! curl -fsSL "${base_url}/cosign-linux-${arch_sfx}" -o "$bin_file"; then
+            print_error "Download failed: cosign-linux-${arch_sfx}"
+            rm -f "$bin_file"
+            return 1
+        fi
+        local got_hash
+        got_hash=$(sha256sum "$bin_file" | awk '{print $1}')
+        if [[ "$got_hash" != "$want_bin_hash" ]]; then
+            print_error "cosign binary SHA256 mismatch — refusing to install"
+            print_error "  expected: $want_bin_hash"
+            print_error "  got:      $got_hash"
+            rm -f "$bin_file"
+            return 1
+        fi
+        print_ok "cosign binary hash verified"
+        if ! install -Dm0755 "$bin_file" /usr/local/bin/cosign 2>/dev/null; then
+            print_error "failed to install cosign to /usr/local/bin"
+            rm -f "$bin_file"
+            return 1
+        fi
+        rm -f "$bin_file"
+        # Make sure the freshly-installed binary is reachable for the
+        # verify-blob call below even if /usr/local/bin wasn't on PATH.
+        export PATH="/usr/local/bin:${PATH}"
+    fi
+
+    if ! command -v cosign &>/dev/null; then
+        print_error "cosign installed but not on PATH"
+        return 1
+    fi
+    print_ok "cosign v${COSIGN_PIN_VERSION} installed"
+}
+
+check_requirements() {
+    if [[ "$(id -u)" != "0" ]]; then
+        print_error "This script must be run as root"
+        echo "Usage: curl -fsSL https://raw.githubusercontent.com/${VPSSEC_REPO}/main/run.sh | sudo bash"
+        exit 1
+    fi
+
+    local missing=()
+    for cmd in curl jq tar; do
+        command -v "$cmd" &>/dev/null || missing+=("$cmd")
+    done
+
+    if (( ${#missing[@]} > 0 )); then
+        print_warn "Installing missing dependencies: ${missing[*]}"
+        # Refresh package metadata only — NOT `yum update` (which upgrades
+        # every package, or stalls on a y/N prompt with no tty). makecache is
+        # the metadata-only equivalent on both yum and dnf.
+        apt-get update -qq 2>/dev/null || yum -q makecache 2>/dev/null || dnf -q makecache 2>/dev/null || true
+        apt-get install -y "${missing[@]}" 2>/dev/null \
+            || yum install -y "${missing[@]}" 2>/dev/null \
+            || { print_error "Failed to install: ${missing[*]}"; exit 1; }
+    fi
+
+    if [[ "$VPSSEC_NO_VERIFY" == "1" ]]; then
+        return 0
+    fi
+
+    if ! command -v cosign &>/dev/null; then
+        print_info "Installing cosign for signature verification..."
+        if ! apt-get install -y cosign 2>/dev/null; then
+            # apt has nothing (Debian, older Ubuntu, RHEL-family). Try
+            # the pinned sigstore .deb fallback before giving up.
+            if ! install_cosign_pinned; then
+                print_error "cosign is required to verify the release signature."
+                echo ""
+                echo "  Manual install :  https://docs.sigstore.dev/cosign/system_config/installation/"
+                echo "  Skip verify    :  re-run with  VPSSEC_NO_VERIFY=1  (not recommended)"
+                exit 1
+            fi
+        fi
+    fi
+}
+
+# Resolve "latest" to a concrete tag via the GitHub API. This is the
+# latest *published* release (matches what shows on the Releases page),
+# not the highest git tag.
+# Reject a release tag that is not a clean vX.Y.Z[.-suffix] string before it
+# flows into download URLs and local filenames. The tarball is still
+# cosign-verified before extraction, so this is defense-in-depth: it stops a
+# malicious GitHub API response or an attacker-chosen VPSSEC_VERSION from
+# steering a root-owned curl -o into an unexpected path.
+_validate_version_tag() {
+    local tag="$1"
+    if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]]; then
+        print_error "Refusing suspicious release tag: '$tag'"
+        exit 1
+    fi
+}
+
+resolve_version() {
+    if [[ "$VPSSEC_VERSION" != "latest" ]]; then
+        _validate_version_tag "$VPSSEC_VERSION"
+        return 0
+    fi
+    print_info "Resolving latest release..."
+    VPSSEC_VERSION=$(curl -fsSL "https://api.github.com/repos/${VPSSEC_REPO}/releases/latest" \
+        | jq -r '.tag_name // empty')
+    if [[ -z "$VPSSEC_VERSION" ]]; then
+        print_error "Could not resolve latest release tag from GitHub API"
+        exit 1
+    fi
+    _validate_version_tag "$VPSSEC_VERSION"
+}
+
+# Download tarball + signature bundle from the release, verify against
+# the pinned cosign identity, then extract. Anything other than a
+# fully-passing verify aborts (unless VPSSEC_NO_VERIFY=1, in which
+# case verification is skipped entirely and the signature isn't even
+# downloaded).
+download_and_verify() {
+    local ver_tag="$VPSSEC_VERSION"
+    local ver="${ver_tag#v}"
+    local archive="vpssec-${ver}.tar.gz"
+    local base="https://github.com/${VPSSEC_REPO}/releases/download/${ver_tag}"
+
+    # Create a root-owned, 0700, unguessable temp dir. The name still starts
+    # with /tmp/vpssec- so the cleanup() trap's path guard matches it.
+    VPSSEC_TMP=$(mktemp -d "/tmp/vpssec-XXXXXX") \
+        || { print_error "Failed to create temporary directory"; exit 1; }
+    cd "$VPSSEC_TMP" || { print_error "Failed to enter $VPSSEC_TMP"; exit 1; }
+
+    print_info "Downloading vpssec ${ver_tag}..."
+    curl -fsSL "${base}/${archive}" -o "$archive" \
+        || { print_error "Download failed: ${base}/${archive}"; exit 1; }
+
+    if [[ "$VPSSEC_NO_VERIFY" == "1" ]]; then
+        print_warn "VPSSEC_NO_VERIFY=1 — skipping signature verification"
+    else
+        curl -fsSL "${base}/${archive}.sig.json" -o "${archive}.sig.json" \
+            || { print_error "Signature download failed"; exit 1; }
+        print_info "Verifying signature (sigstore keyless)..."
+        if cosign verify-blob \
+            --bundle "${archive}.sig.json" \
+            --certificate-identity-regexp "$COSIGN_IDENTITY_REGEX" \
+            --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+            "$archive" >/dev/null 2>&1; then
+            print_ok "Signature verified (signer = ${VPSSEC_REPO} release workflow @ ${ver_tag})"
+        else
+            print_error "Signature verification FAILED — refusing to run."
+            print_error "If the signer URL changed, check this run.sh against the latest copy."
+            exit 1
+        fi
+    fi
+
+    print_info "Extracting..."
+    tar -xz --strip-components=1 -f "$archive"
+    chmod +x vpssec
+}
+
+cleanup() {
+    if [[ -n "$VPSSEC_TMP" ]] && [[ "$VPSSEC_TMP" =~ ^/tmp/vpssec- ]] && [[ -d "$VPSSEC_TMP" ]]; then
+        rm -rf "$VPSSEC_TMP"
+    fi
+}
+
+main() {
+    print_banner
+
+    local mode=""
+    local args=()
+    for arg in "$@"; do
+        case "$arg" in
+            audit|guide|rollback|status) mode="$arg" ;;
+            *) args+=("$arg") ;;
+        esac
+    done
+
+    # Install the cleanup trap BEFORE anything creates the temp dir, so a
+    # failure in check_requirements/resolve_version/download_and_verify
+    # (offline host, signature mismatch, GitHub outage) can't leak a
+    # /tmp/vpssec-* directory holding a downloaded, unverified tarball.
+    trap cleanup EXIT
+
+    check_requirements
+    resolve_version
+    download_and_verify
+
+    if [[ -n "$mode" ]]; then
+        print_info "Running vpssec $mode..."
+        echo ""
+        if (( ${#args[@]} > 0 )); then
+            ./vpssec "$mode" "${args[@]}"
+        else
+            ./vpssec "$mode"
+        fi
+    else
+        print_info "Starting vpssec..."
+        echo ""
+        if (( ${#args[@]} > 0 )); then
+            ./vpssec "${args[@]}"
+        else
+            ./vpssec
+        fi
+    fi
+
+    if [[ -d "reports" ]] && [[ "$(ls -A reports 2>/dev/null)" ]]; then
+        local report_dest="/tmp/vpssec-report-$(date +%Y%m%d-%H%M%S)"
+        cp -r reports "$report_dest"
+        echo ""
+        print_info "Reports saved to: $report_dest"
+    fi
+}
+
+main "$@"
