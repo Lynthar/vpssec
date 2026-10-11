@@ -118,6 +118,27 @@ _rescue_fw_with() {
     grep -q 'Firewall is active' <<<"$output"
 }
 
+@test "rescue firewall: a rule ufw would not delete is named with the command that does" {
+    i18n_load en_US
+    SSH_RESCUE_FW_RULE="ufw:203.0.113.9:2222"
+    _vpssec_stub ufw 1
+
+    run _ssh_rescue_remove_firewall
+    [[ "$output" == *"remove it by hand: ufw delete allow from 203.0.113.9 to any port 2222 proto tcp"* ]]
+}
+
+@test "rescue firewall: a rule ufw deleted, or had already gone, is not reported" {
+    # ufw answers 0 for a rule that is already gone, as after the watchdog's
+    # teardown, so the parent's second delete stays quiet.
+    i18n_load en_US
+    SSH_RESCUE_FW_RULE="ufw::2222"
+    _vpssec_stub ufw 0
+
+    run _ssh_rescue_remove_firewall
+    [ -z "$output" ]
+    _vpssec_stub_called ufw 'delete allow 2222/tcp'
+}
+
 # ---- the rescue's lifetime bound --------------------------------------------
 
 # True while $1 runs; a never-reaped zombie (its parent may be a PID 1 that
@@ -140,16 +161,20 @@ _keeping_bats_traps() {
     return "$rc"
 }
 
-# A stand-in vpssec in its own process: it arms the watchdog over a fake rescue
-# daemon ($1) and then blocks, as it would at the confirmation prompt. $2 and
-# $3 override the confirmation window and the grace period.
+# A stand-in vpssec that arms the watchdog over a fake rescue ($1), then blocks as
+# at the confirmation prompt ($2 / $3: window and grace). Its parent never reaps
+# it, so once killed it stays a zombie, as under a CI container's PID 1.
 _vpssec_holding_rescue() {
-    bash -c 'source "$1/core/common.sh"; source "$1/modules/ssh.sh"
+    local pidfile="$BATS_TEST_TMPDIR/holder.pid" i
+    bash -c 'bash -c "$1" _ "$2" "$3" "$4" "$5" & echo $! > "$6"; exec sleep 300' _ \
+        'source "$1/core/common.sh"; source "$1/modules/ssh.sh"
         _log_file=/dev/null; VPSSEC_CONFIRM_TIMEOUT=$3; SSH_RESCUE_GRACE=$4
         SSH_RESCUE_PID=$2; SSH_RESCUE_PORT=2222; SSH_RESCUE_FW_RULE="ufw::2222"
         _ssh_rescue_start_watchdog; sleep 300' \
-        _ "$(_vpssec_repo_root)" "$1" "${2:-300}" "${3:-120}" >/dev/null 2>&1 &
-    echo $!
+        "$(_vpssec_repo_root)" "$1" "${2:-300}" "${3:-120}" "$pidfile" \
+        >/dev/null 2>&1 3>&- &
+    for i in $(seq 1 50); do [[ -s "$pidfile" ]] && break; sleep 0.1; done
+    cat "$pidfile"
 }
 
 @test "rescue watchdog: vpssec killed by SIGKILL does not leave the rescue running" {
