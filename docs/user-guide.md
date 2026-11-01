@@ -1546,7 +1546,7 @@ workflow 只运行主机上装好的 `vpssec`，不运行检出的仓库代码�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Lynthar/vpssec/main/install.sh \
-  | sudo env VPSSEC_VERSION=v0.8.0 bash
+  | sudo env VPSSEC_VERSION=v0.9.0 bash
 ```
 
 runner 的账号要能免密 `sudo` 执行下面那两条命令。报告写在默认安装目录的
