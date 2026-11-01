@@ -130,7 +130,7 @@ _cosign_records_argv() {
 _expected_argv() {
     printf '%s\n' verify-blob --bundle "$1.sig.json" \
         --certificate-identity \
-        "https://github.com/Lynthar/CloudServer-Audit/.github/workflows/release.yml@refs/tags/v9.8.7" \
+        "https://github.com/Lynthar/vpssec/.github/workflows/release.yml@refs/tags/v9.8.7" \
         --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
         "$1"
 }
@@ -151,9 +151,9 @@ _expected_argv() {
 @test "install.sh's repo, and with it the signer identity, ignores the environment" {
     # An override redirected the download and moved the identity cosign checks
     # along with it; run.sh never took one.
-    local GITHUB_REPO=someone-else/CloudServer-Audit
+    local GITHUB_REPO=someone-else/vpssec
     eval "$(grep -E '^GITHUB_REPO=' "$(_vpssec_repo_root)/install.sh")"
-    [ "$GITHUB_REPO" = "Lynthar/CloudServer-Audit" ]
+    [ "$GITHUB_REPO" = "Lynthar/vpssec" ]
 }
 
 @test "install.sh asks cosign for this repo's release workflow at the requested tag, and nothing looser" {

@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VPSSEC_REPO="Lynthar/CloudServer-Audit"
+VPSSEC_REPO="Lynthar/vpssec"
 VPSSEC_VERSION="${VPSSEC_VERSION:-latest}"
 VPSSEC_NO_VERIFY="${VPSSEC_NO_VERIFY:-0}"
 # A root-owned `mktemp -d` (0700). Never a predictable /tmp path: $$ is a

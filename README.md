@@ -1,15 +1,15 @@
-# CloudServer-Audit
+# vpssec
 
-[![license](https://img.shields.io/github/license/Lynthar/CloudServer-Audit)](LICENSE)
-[![tests](https://img.shields.io/github/actions/workflow/status/Lynthar/CloudServer-Audit/tests.yml?branch=main&label=tests)](https://github.com/Lynthar/CloudServer-Audit/actions/workflows/tests.yml)
-[![shellcheck](https://img.shields.io/github/actions/workflow/status/Lynthar/CloudServer-Audit/shellcheck.yml?branch=main&label=shellcheck)](https://github.com/Lynthar/CloudServer-Audit/actions/workflows/shellcheck.yml)
-[![release](https://img.shields.io/github/v/release/Lynthar/CloudServer-Audit)](https://github.com/Lynthar/CloudServer-Audit/releases)
+[![license](https://img.shields.io/github/license/Lynthar/vpssec)](LICENSE)
+[![tests](https://img.shields.io/github/actions/workflow/status/Lynthar/vpssec/tests.yml?branch=main&label=tests)](https://github.com/Lynthar/vpssec/actions/workflows/tests.yml)
+[![shellcheck](https://img.shields.io/github/actions/workflow/status/Lynthar/vpssec/shellcheck.yml?branch=main&label=shellcheck)](https://github.com/Lynthar/vpssec/actions/workflows/shellcheck.yml)
+[![release](https://img.shields.io/github/v/release/Lynthar/vpssec)](https://github.com/Lynthar/vpssec/releases)
 
 Rollback-first hardening for Debian/Ubuntu VPS hosts, with a read-only audit that also covers RHEL-family and Arch
 
 English | [简体中文](README.zh-CN.md)
 
-The command is `vpssec`. It's a Bash script you run as root, one machine at a
+`vpssec` is a Bash script you run as root, one machine at a
 time, and it leaves no process running after it exits.
 
 Audit mode is read-only, so you can point it at any machine and just read the
@@ -26,7 +26,7 @@ signature, runs, and deletes itself. If you save the report when asked at the
 end, it is copied out to `/tmp/vpssec-report-*`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lynthar/CloudServer-Audit/main/run.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Lynthar/vpssec/main/run.sh | sudo bash
 ```
 
 If you want state and backups to survive between runs, install it locally
@@ -34,7 +34,7 @@ If you want state and backups to survive between runs, install it locally
 place:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lynthar/CloudServer-Audit/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Lynthar/vpssec/main/install.sh | sudo bash
 sudo vpssec audit
 ```
 

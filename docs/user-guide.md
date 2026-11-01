@@ -1,4 +1,4 @@
-# CloudServer-Audit 检测项详解与修复指南
+# vpssec 检测项详解与修复指南
 
 本指南详细说明脚本的每项安全检测内容，帮助您理解检测结果并解决发现的问题。
 
@@ -1545,7 +1545,7 @@ workflow 只运行主机上装好的 `vpssec`，不运行检出的仓库代码�
 （不钉就装最新版，见 README「安全」一节）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lynthar/CloudServer-Audit/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Lynthar/vpssec/main/install.sh \
   | sudo env VPSSEC_VERSION=v0.8.0 bash
 ```
 
@@ -1600,7 +1600,7 @@ jobs:
 
 1. 查看脚本帮助：`sudo ./vpssec --help`
 2. 查看详细日志：项目根目录下的 `logs/vpssec.log`（追加 `--debug` 可获得更详细的输出）
-3. 提交 Issue：[GitHub Issues](https://github.com/Lynthar/CloudServer-Audit/issues)
+3. 提交 Issue：[GitHub Issues](https://github.com/Lynthar/vpssec/issues)
 
 ---
 

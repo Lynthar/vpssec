@@ -10,7 +10,7 @@ VPSSEC_VERSION="${VPSSEC_VERSION:-latest}"
 VPSSEC_NO_VERIFY="${VPSSEC_NO_VERIFY:-0}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/vpssec}"
 BIN_LINK="/usr/local/bin/vpssec"
-GITHUB_REPO="Lynthar/CloudServer-Audit"
+GITHUB_REPO="Lynthar/vpssec"
 
 # The identity must name this repo's release workflow at EXACTLY the tag being
 # installed. A looser any-v*-tag match would accept a signed asset from another

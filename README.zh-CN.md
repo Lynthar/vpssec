@@ -1,15 +1,15 @@
-# CloudServer-Audit
+# vpssec
 
-[![license](https://img.shields.io/github/license/Lynthar/CloudServer-Audit)](LICENSE)
-[![tests](https://img.shields.io/github/actions/workflow/status/Lynthar/CloudServer-Audit/tests.yml?branch=main&label=tests)](https://github.com/Lynthar/CloudServer-Audit/actions/workflows/tests.yml)
-[![shellcheck](https://img.shields.io/github/actions/workflow/status/Lynthar/CloudServer-Audit/shellcheck.yml?branch=main&label=shellcheck)](https://github.com/Lynthar/CloudServer-Audit/actions/workflows/shellcheck.yml)
-[![release](https://img.shields.io/github/v/release/Lynthar/CloudServer-Audit)](https://github.com/Lynthar/CloudServer-Audit/releases)
+[![license](https://img.shields.io/github/license/Lynthar/vpssec)](LICENSE)
+[![tests](https://img.shields.io/github/actions/workflow/status/Lynthar/vpssec/tests.yml?branch=main&label=tests)](https://github.com/Lynthar/vpssec/actions/workflows/tests.yml)
+[![shellcheck](https://img.shields.io/github/actions/workflow/status/Lynthar/vpssec/shellcheck.yml?branch=main&label=shellcheck)](https://github.com/Lynthar/vpssec/actions/workflows/shellcheck.yml)
+[![release](https://img.shields.io/github/v/release/Lynthar/vpssec)](https://github.com/Lynthar/vpssec/releases)
 
 可回滚的 Debian/Ubuntu 主机加固执行器；只读审计另覆盖 RHEL 系与 Arch
 
 [English](README.md) | 简体中文
 
-命令叫 `vpssec`，是纯 Bash 脚本，以 root 运行，一次处理一台机器，退出之后不留常驻进程。
+`vpssec` 是纯 Bash 脚本，以 root 运行，一次处理一台机器，退出之后不留常驻进程。
 
 审计模式是只读的，可以放心在任何机器上运行，看完报告就结束。引导加固模式会改
 `/etc`：它会先把每个文件备份下来，把新版本验证通过之后才提交，并且能按时间戳把改动
@@ -23,14 +23,14 @@
 `/tmp/vpssec-report-*`。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lynthar/CloudServer-Audit/main/run.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Lynthar/vpssec/main/run.sh | sudo bash
 ```
 
 想让状态和备份在多次运行之间留存，就用下面这条装到本地（也可以直接 clone 本仓库）。
 重跑同一条命令就是原地升级：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lynthar/CloudServer-Audit/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Lynthar/vpssec/main/install.sh | sudo bash
 sudo vpssec audit
 ```
 

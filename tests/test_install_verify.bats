@@ -22,7 +22,7 @@ setup() {
     print_error() { echo "[ERROR] $*"; }
     sleep() { :; }
 
-    GITHUB_REPO="Lynthar/CloudServer-Audit"
+    GITHUB_REPO="Lynthar/vpssec"
     COSIGN_OIDC_ISSUER="https://token.actions.githubusercontent.com"
     VPSSEC_NO_VERIFY=0
     VPSSEC_STAGING=""

@@ -73,8 +73,8 @@ run_case "release-signature-run/tlog-ignored" 1 \
 
 # The identity names another repository's workflow.
 run_case "release-signature-run/repo-constant" 1 \
-    'VPSSEC_REPO="Lynthar/CloudServer-Audit"' \
-    'VPSSEC_REPO="someone-else/CloudServer-Audit"'
+    'VPSSEC_REPO="Lynthar/vpssec"' \
+    'VPSSEC_REPO="someone-else/vpssec"'
 
 # A bare 1.2.0 is refused again, though install.sh takes it for the same tag.
 run_case "release-signature-run/no-tag-normalise" 1 \

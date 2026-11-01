@@ -13,7 +13,7 @@ setup() {
     eval "$(awk '/^_refuse_stateful_mode\(\)/,/^}/' "$src")"
 
     print_error() { echo "[ERROR] $*"; }
-    VPSSEC_REPO="Lynthar/CloudServer-Audit"
+    VPSSEC_REPO="Lynthar/vpssec"
 }
 
 @test "guide is refused, and not with the code that means a wrong host" {

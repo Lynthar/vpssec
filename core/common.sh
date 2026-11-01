@@ -29,7 +29,7 @@ VPSSEC_BACKUP_SESSION=""
 VPSSEC_LOGS="${VPSSEC_ROOT}/logs"
 VPSSEC_TEMPLATES="${VPSSEC_ROOT}/templates"
 # Upstream identity, used only to look up the newest release tag.
-VPSSEC_REPO="${VPSSEC_REPO:-Lynthar/CloudServer-Audit}"
+VPSSEC_REPO="${VPSSEC_REPO:-Lynthar/vpssec}"
 
 # Default settings. A VPSSEC_LANG from the environment answers the language
 # menu, as --lang does.

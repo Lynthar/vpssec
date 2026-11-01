@@ -750,7 +750,7 @@ report_generate_sarif() {
               "driver": {
                 "name": "vpssec",
                 "version": $version,
-                "informationUri": "https://github.com/Lynthar/CloudServer-Audit",
+                "informationUri": "https://github.com/Lynthar/vpssec",
                 "rules": (
                   reduce $checks[] as $c ({seen: {}, out: []};
                     if (.seen[$c.id] // false) then .
