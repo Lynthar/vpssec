@@ -20,3 +20,63 @@ run_case "keylogin/root-refusal-ignored" 1 \
 run_case "keylogin/pubkey-off-ignored" 1 \
     '    _ssh_pubkey_enabled "$user" || return 1' \
     '    :'
+
+# sshd's AllowUsers / DenyUsers / AllowGroups / DenyGroups: an admin they turn
+# away is no way back in, whatever keys and passwords it holds.
+run_case "access/admits-skipped" 1 \
+    '    _ssh_sshd_admits "$user" || return 1' \
+    '    :'
+
+run_case "access/root-fallback-admits-ignored" 1 \
+    '        if _ssh_sshd_admits root && _ssh_can_login_with_key root; then' \
+    '        if _ssh_can_login_with_key root; then'
+
+run_case "access/deny-users-ignored" 1 \
+    '    _ssh_user_list_matches "$user" "$ip" 0 "${deny_u[@]}" && return 1' \
+    '    :'
+
+run_case "access/allow-users-ignored" 1 \
+    '        _ssh_user_list_matches "$user" "$ip" 1 "${allow_u[@]}" || return 1' \
+    '        :'
+
+run_case "access/deny-groups-ignored" 1 \
+    '    _ssh_groups_match "$glist" "${deny_g[@]}" && return 1' \
+    '    :'
+
+run_case "access/allow-groups-ignored" 1 \
+    '    (( ${#allow_g[@]} == 0 )) || _ssh_groups_match "$glist" "${allow_g[@]}"' \
+    '    true'
+
+run_case "access/usedns-ignored" 1 \
+    '    [[ "$(_ssh_list_entries usedns <<<"$dump")" == yes ]] || ip=$(get_current_ssh_ip)' \
+    '    ip=$(get_current_ssh_ip)'
+
+run_case "access/session-address-unchecked" 1 \
+    '    validate_ip "$ip" >/dev/null 2>&1 || ip=""' \
+    '    :'
+
+# A host part with no client address to judge it by must fail closed both ways.
+run_case "access/unknown-host-allows" 1 \
+    '    [[ -n "$ip" ]] || return "$4"' \
+    '    [[ -n "$ip" ]] || return 0'
+
+run_case "access/unknown-host-denies-nothing" 1 \
+    '    [[ -n "$ip" ]] || return "$4"' \
+    '    [[ -n "$ip" ]] || return 1'
+
+run_case "access/user-part-of-user-at-host-ignored" 1 \
+    '    _ssh_match_pattern "$user" "${entry%@*}" || return 1' \
+    '    :'
+
+run_case "host/negation-ignored" 1 \
+    '        (( neg )) && return 1' \
+    '        :'
+
+run_case "cidr/prefix-ignored" 1 \
+    '    [[ "$2" == */* ]] && len=$(( 10#${2#*/} ))' \
+    '    :'
+
+# Read as a bash glob, `[x]` would admit the user x.
+run_case "pattern/brackets-as-glob" 1 \
+    '            *)       pat+="\\$c" ;;' \
+    '            *)       pat+="$c" ;;'

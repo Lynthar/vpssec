@@ -45,16 +45,16 @@ print_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 # reinstall over an existing directory must honour the same contract.
 INSTALL_DATA_STASH=""
 
-# Move state/, backups/ and templates/ (installed alert hooks source it) into a
-# fresh sibling of INSTALL_DIR before the tree is removed: root-only parent,
-# same filesystem, never /tmp.
+# Move state/, backups/, templates/ (installed alert hooks source it) and logs/
+# (the only record of each fix's "Undo for" commands) into a fresh sibling of
+# INSTALL_DIR before the tree is removed: root-only parent, same fs, never /tmp.
 stash_data_dirs() {
     local d
-    for d in state backups templates; do
+    for d in state backups templates logs; do
         [[ -d "$INSTALL_DIR/$d" ]] || continue
         if [[ -z "$INSTALL_DATA_STASH" ]]; then
             INSTALL_DATA_STASH=$(mktemp -d "${INSTALL_DIR}.upgrade-XXXXXX") \
-                || { print_error "Cannot create a stash for state/backups/templates — aborting before anything is removed"; exit 1; }
+                || { print_error "Cannot create a stash for state/backups/templates/logs — aborting before anything is removed"; exit 1; }
         fi
         mv "$INSTALL_DIR/$d" "$INSTALL_DATA_STASH/$d" \
             || { print_error "Cannot stash $d — aborting before anything is removed"; exit 1; }
@@ -62,7 +62,7 @@ stash_data_dirs() {
     # if-form, not `[[ ]] &&`: under set -e a fresh install (no data dirs)
     # must not turn the empty-stash status into an installer abort.
     if [[ -n "$INSTALL_DATA_STASH" ]]; then
-        print_info "Preserving existing state/, backups/ and templates/ across the reinstall"
+        print_info "Preserving existing state/, backups/, templates/ and logs/ across the reinstall"
     fi
 }
 
@@ -70,7 +70,7 @@ stash_data_dirs() {
 restore_data_dirs() {
     [[ -n "$INSTALL_DATA_STASH" ]] || return 0
     local d
-    for d in state backups templates; do
+    for d in state backups templates logs; do
         [[ -d "$INSTALL_DATA_STASH/$d" ]] || continue
         rm -rf "${INSTALL_DIR:?}/$d"
         mv "$INSTALL_DATA_STASH/$d" "$INSTALL_DIR/$d" \
@@ -98,7 +98,7 @@ _install_cleanup() {
     # if-form throughout: a failing test as the trap's last command would
     # overwrite the script's real exit status.
     if [[ -n "$INSTALL_DATA_STASH" && -d "$INSTALL_DATA_STASH" ]]; then
-        print_warn "Install did not finish — your state/backups/templates are preserved at: $INSTALL_DATA_STASH"
+        print_warn "Install did not finish — your state/backups/templates/logs are preserved at: $INSTALL_DATA_STASH"
     fi
 }
 trap _install_cleanup EXIT
@@ -390,10 +390,12 @@ install_vpssec() {
         print_ok "Signature verified (signer = ${GITHUB_REPO} release workflow @ ${ver_tag})"
     fi
 
-    # The release tarball carries a single vpssec-<ver>/ top level.
+    # The release tarball carries a single vpssec-<ver>/ top level. Its modes are
+    # not trusted: as root, tar keeps a group-writable entry group-writable, and
+    # this tree runs as root. The 022 umask applies instead.
     print_info "Extracting..."
-    tar -xz -f "${VPSSEC_STAGING}/${archive}" -C "$VPSSEC_STAGING" \
-        || { print_error "Extract failed"; exit 1; }
+    (umask 022 && tar -xz --no-same-permissions -f "${VPSSEC_STAGING}/${archive}" \
+        -C "$VPSSEC_STAGING") || { print_error "Extract failed"; exit 1; }
     if [[ ! -d "${VPSSEC_STAGING}/vpssec-${ver}" ]]; then
         print_error "Release tarball did not contain vpssec-${ver}/ — refusing to install"
         exit 1

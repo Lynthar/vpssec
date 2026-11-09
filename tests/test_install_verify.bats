@@ -191,3 +191,26 @@ setup() {
     [ -n "$run_fn" ]
     [ "$run_fn" = "$install_fn" ]
 }
+
+@test "the installed tree is writable by root alone, whatever modes the tarball carries" {
+    # git archive's default tar.umask ships 664 files and 775 dirs, and root's
+    # tar keeps archive modes; this tree is executed as root.
+    local src="$BATS_TEST_TMPDIR/src/vpssec-1.2.0"
+    mkdir -p "$src/core"
+    printf '#!/bin/bash\n' > "$src/vpssec"
+    printf 'x\n' > "$src/core/common.sh"
+    chmod 775 "$src" "$src/core" "$src/vpssec"
+    chmod 664 "$src/core/common.sh"
+    TARBALL="$BATS_TEST_TMPDIR/release.tar.gz"
+    command tar -czf "$TARBALL" -C "$BATS_TEST_TMPDIR/src" vpssec-1.2.0
+
+    curl() { if [[ "${*: -1}" == *.tar.gz ]]; then cp "$TARBALL" "${*: -1}"; else : > "${*: -1}"; fi; }
+    cosign() { return 0; }
+    export -f curl cosign 2>/dev/null || true
+
+    VPSSEC_VERSION="v1.2.0"
+    run install_vpssec
+    [ "$status" -eq 0 ]
+    [ -f "$INSTALL_DIR/core/common.sh" ]
+    [ -z "$(find "$INSTALL_DIR" -perm /022)" ]
+}

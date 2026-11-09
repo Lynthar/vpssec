@@ -148,6 +148,14 @@ SH
     _dropin_has "kernel.dmesg_restrict" "1"
 }
 
+@test "sysctl drop-in: a key appended after the fix stays on its own line" {
+    _kernel_write_sysctl "kernel.dmesg_restrict" "1"
+    _kernel_write_sysctl "kernel.kptr_restrict" "2"
+    echo "vm.swappiness = 10" >> "$VPSSEC_SYSCTL_CONF"
+    _dropin_has "kernel.kptr_restrict" "2"
+    _dropin_has "vm.swappiness" "10"
+}
+
 @test "sysctl drop-in: the header appears exactly once after several params" {
     _kernel_write_sysctl "kernel.dmesg_restrict" "1"
     _kernel_write_sysctl "kernel.kptr_restrict" "2"

@@ -43,7 +43,7 @@ run_case "rootoff/password-state-assumed" 1 \
     '    pw_after="yes"'
 
 run_case "passwordoff/root-fallback-ignores-refusal" 1 \
-    '        if _ssh_can_login_with_key "root"; then' \
+    '        if _ssh_sshd_admits root && _ssh_can_login_with_key root; then' \
     '        if true; then'
 
 # Each SSH fix's rescue confirmation, skipped: the change lands without the

@@ -162,6 +162,106 @@ SH
     _ssh_account_can_login alice
 }
 
+# ---- does sshd's AllowUsers / DenyUsers / AllowGroups / DenyGroups admit it --
+
+# $1 user, rest: the groups `id -Gn` lists for it. Users never given any are
+# unknown to `id`, which then fails as the real one does.
+_TEST_GROUPS=""
+_groups() { _TEST_GROUPS+="$1:${*:2}"$'\n'; }
+id() {
+    local line
+    [[ "$1" == -Gn ]] || { command id "$@"; return; }
+    line=$(grep "^$3:" <<<"$_TEST_GROUPS") || return 1
+    echo "${line#*:}"
+}
+
+@test "access lists: an admin AllowUsers leaves out is refused, the one it names admitted" {
+    _ssh_sshd_admits aqua
+    _dropin 50-allow.conf 'AllowUsers deploy'
+    _vpssec_refute _ssh_sshd_admits aqua
+    _ssh_sshd_admits deploy
+}
+
+@test "access lists: entries add up across lines and DenyUsers outranks AllowUsers" {
+    _dropin 40-a.conf 'AllowUsers carol'
+    _dropin 50-b.conf 'AllowUsers deploy bob' 'DenyUsers bob'
+    _ssh_sshd_admits carol
+    _ssh_sshd_admits deploy
+    _vpssec_refute _ssh_sshd_admits bob
+}
+
+@test "access lists: user patterns take * and ? only, case-sensitive, nothing else special" {
+    _dropin 50-allow.conf 'AllowUsers d* b?b [x]'
+    _ssh_sshd_admits deploy
+    _ssh_sshd_admits bob
+    _vpssec_refute _ssh_sshd_admits boob
+    _vpssec_refute _ssh_sshd_admits Deploy
+    _vpssec_refute _ssh_sshd_admits x
+    _ssh_sshd_admits '[x]'
+}
+
+@test "access lists: USER@HOST is judged against this session's client address" {
+    # setup's session comes from 203.0.113.9.
+    _dropin 50-allow.conf 'AllowUsers deploy@203.0.113.0/24 aqua@198.51.100.0/24'
+    _ssh_sshd_admits deploy
+    _vpssec_refute _ssh_sshd_admits aqua
+
+    _dropin 50-allow.conf 'AllowUsers deploy@203.0.113.*,!203.0.113.9 aqua@203.0.113.9'
+    _vpssec_refute _ssh_sshd_admits deploy
+    _ssh_sshd_admits aqua
+
+    _dropin 50-allow.conf 'DenyUsers deploy@198.51.100.7'
+    _ssh_sshd_admits deploy
+}
+
+@test "access lists: an IPv6 client is matched by prefix, never by an IPv4 list" {
+    get_current_ssh_ip() { echo "2001:db8:0:1::5"; }
+    _dropin 50-allow.conf 'AllowUsers deploy@2001:db8::/32 aqua@2001:db9::/32 bob@203.0.113.0/24'
+    _ssh_sshd_admits deploy
+    _vpssec_refute _ssh_sshd_admits aqua
+    _vpssec_refute _ssh_sshd_admits bob
+}
+
+@test "access lists: with no session, or UseDNS on, a host-limited entry fails closed" {
+    get_current_ssh_ip() { :; }
+    _dropin 50-allow.conf 'AllowUsers deploy@203.0.113.0/24 aqua'
+    _vpssec_refute _ssh_sshd_admits deploy
+    _ssh_sshd_admits aqua
+    _dropin 50-allow.conf 'DenyUsers deploy@198.51.100.7'
+    _vpssec_refute _ssh_sshd_admits deploy
+
+    # An address that is no plain IP literal is no address to judge by either.
+    get_current_ssh_ip() { echo "fe80::1%eth0"; }
+    _dropin 50-allow.conf 'DenyUsers deploy@fe80::/10'
+    _vpssec_refute _ssh_sshd_admits deploy
+
+    get_current_ssh_ip() { echo "203.0.113.9"; }
+    _dropin 50-allow.conf 'UseDNS yes' 'AllowUsers deploy@203.0.113.0/24'
+    _vpssec_refute _ssh_sshd_admits deploy
+}
+
+@test "access lists: groups cover every group id lists, DenyGroups first" {
+    _groups deploy deploy sudo
+    _groups aqua aqua sudo nogo
+    _groups bob bob
+    _dropin 50-allow.conf 'AllowGroups su*' 'DenyGroups nogo'
+    _ssh_sshd_admits deploy
+    _vpssec_refute _ssh_sshd_admits aqua
+    _vpssec_refute _ssh_sshd_admits bob
+    # Group membership that cannot be read fails closed.
+    _vpssec_refute _ssh_sshd_admits ghost
+}
+
+@test "access lists: each user is asked with its own Match blocks applied" {
+    # The merging stub ignores Match; real sshd -T -C user=alice replaces the
+    # global list with the block's, so the per-user dump is the one that counts.
+    sshd_effective_config() {
+        if [[ "$1" == alice ]]; then echo 'allowusers alice'; else echo 'allowusers deploy'; fi
+    }
+    _ssh_sshd_admits alice
+    _vpssec_refute _ssh_sshd_admits aqua
+}
+
 # ---- the gates on these inputs ------------------------------------------
 
 @test "password-off gate: PermitRootLogin no, a keyless admin and a root key is refused" {
@@ -209,4 +309,37 @@ SH
     run _ssh_fix_disable_root_login
     [ "$status" -eq 1 ]
     [ ! -e "$SSH_HARDENING_DROPIN" ]
+}
+
+@test "root-off gate: a keyed admin AllowUsers leaves out does not count" {
+    # The production shape: cloud-init's sudo account has a key and a password,
+    # but sshd only admits the deploy account, which cannot reach root.
+    _account aqua /bin/bash
+    _account deploy /bin/bash
+    _TEST_ADMINS="aqua"
+    _key aqua
+    _key deploy
+    _dropin 50-allow.conf 'AllowUsers deploy'
+
+    run _ssh_fix_disable_root_login
+    [ "$status" -eq 1 ]
+    [ ! -e "$SSH_HARDENING_DROPIN" ]
+
+    _TEST_ADMINS="aqua deploy"
+    run _ssh_fix_disable_root_login
+    [ "$status" -eq 0 ]
+    grep -q '^PermitRootLogin no$' "$SSH_HARDENING_DROPIN"
+}
+
+@test "password-off gate: neither an admin nor root that AllowUsers leaves out is a way back in" {
+    _account aqua /bin/bash
+    _TEST_ADMINS="aqua"
+    _key aqua
+    _key root
+    _dropin 50-allow.conf 'AllowUsers deploy'
+
+    run _ssh_fix_disable_password_auth
+    [ "$status" -eq 1 ]
+    [ ! -e "$SSH_HARDENING_DROPIN" ]
+    [ ! -e "$BATS_TEST_TMPDIR/rescue-up" ]
 }

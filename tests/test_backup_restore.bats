@@ -469,6 +469,16 @@ SH
     [ "$(cat "$etc/dangling.conf")" = "new" ]
 }
 
+@test "write_file_atomic ends the file with one newline, so an append starts its own line" {
+    local etc="$TEST_HOST_ROOT/etc"
+    write_file_atomic "$etc/a.conf" $'one\ntwo'
+    echo three >> "$etc/a.conf"
+    [ "$(tail -n 1 "$etc/a.conf")" = "three" ]
+
+    write_file_atomic "$etc/b.conf" $'one\n'
+    [ "$(wc -l < "$etc/b.conf")" -eq 1 ]
+}
+
 # ---- a path that is now a directory -----------------------------------------
 # GNU mv and cp treat a directory destination as "move/copy INTO it": the write
 # landed inside the directory and reported success.

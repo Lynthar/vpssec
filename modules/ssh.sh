@@ -188,12 +188,149 @@ _ssh_password_usable() {
     [[ -n "$hash" && "$hash" != [\!\*]* ]]
 }
 
+# Every entry of list keyword $1 (lower case) in the `sshd -T` dump on stdin, one
+# per line: sshd prints each AllowUsers/DenyGroups/... entry on its own line.
+_ssh_list_entries() {
+    awk -v k="$1" '$1 == k { for (i = 2; i <= NF; i++) print $i }'
+}
+
+# sshd's match_pattern: `*` and `?` are wildcards, every other character literal,
+# case-sensitive. A bash glob would also read `[...]` and extglob syntax.
+_ssh_match_pattern() {
+    local pat="" i c
+    for (( i = 0; i < ${#2}; i++ )); do
+        c="${2:i:1}"
+        case "$c" in
+            '*'|'?') pat+="$c" ;;
+            *)       pat+="\\$c" ;;
+        esac
+    done
+    # shellcheck disable=SC2053  # the pattern is a glob on purpose
+    [[ "$1" == $pat ]]
+}
+
+# Address $1 as decimal words: 4 octets, or 8 hextets with `::` expanded.
+_ssh_ip_words() {
+    local ip="$1" w
+    local -a head=() tail=() out=()
+    validate_ip "$ip" || return 1
+    if [[ "$ip" != *:* ]]; then
+        IFS=. read -ra out <<<"$ip"
+        for w in "${out[@]}"; do printf '%d ' "$((10#$w))"; done
+        return 0
+    fi
+    [[ "${ip%%::*}" == "" ]] || IFS=: read -ra head <<<"${ip%%::*}"
+    [[ "$ip" == *::* && -n "${ip#*::}" ]] && IFS=: read -ra tail <<<"${ip#*::}"
+    out=("${head[@]}")
+    for (( w = ${#head[@]} + ${#tail[@]}; w < 8; w++ )); do out+=(0); done
+    out+=("${tail[@]}")
+    for w in "${out[@]}"; do printf '%d ' "$((16#$w))"; done
+}
+
+# Is address $1 inside $2, an address or address/prefix? Addresses of different
+# families never match, as in sshd.
+_ssh_addr_in_cidr() {
+    local len width bits i
+    local -a a=() b=()
+    read -ra a <<<"$(_ssh_ip_words "$1")"
+    read -ra b <<<"$(_ssh_ip_words "${2%%/*}")"
+    (( ${#a[@]} > 0 && ${#a[@]} == ${#b[@]} )) || return 1
+    width=$(( ${#a[@]} == 4 ? 8 : 16 ))
+    len=$(( ${#a[@]} * width ))
+    [[ "$2" == */* ]] && len=$(( 10#${2#*/} ))
+    for (( i = 0; len > 0; i++ )); do
+        bits=$(( len < width ? len : width ))
+        (( ((a[i] ^ b[i]) >> (width - bits)) == 0 )) || return 1
+        len=$(( len - bits ))
+    done
+}
+
+# Does the HOST of a USER@HOST entry (comma list of addresses, CIDRs or wildcards,
+# `!` negating) admit client address $1? Judged as sshd does with UseDNS off,
+# where the host name is the address: any negated hit refuses.
+_ssh_host_list_admits() {
+    local ip="$1" entry neg hit=1
+    local -a entries=()
+    IFS=, read -ra entries <<<"$2"
+    for entry in "${entries[@]}"; do
+        neg=0
+        [[ "$entry" == '!'* ]] && { neg=1; entry="${entry#!}"; }
+        if _ssh_valid_cidr "$entry"; then
+            _ssh_addr_in_cidr "$ip" "$entry" || continue
+        else
+            _ssh_match_pattern "${ip,,}" "${entry,,}" || continue
+        fi
+        (( neg )) && return 1
+        hit=0
+    done
+    return "$hit"
+}
+
+# Does AllowUsers/DenyUsers entry $3 name user $1 connecting from $2? sshd splits
+# at the last `@`. With no client address the host part is unknowable and the
+# answer is $4: each list passes the value that fails closed for it.
+_ssh_user_entry_matches() {
+    local user="$1" ip="$2" entry="$3"
+    [[ "$entry" == *@* ]] || { _ssh_match_pattern "$user" "$entry"; return; }
+    _ssh_match_pattern "$user" "${entry%@*}" || return 1
+    [[ -n "$ip" ]] || return "$4"
+    _ssh_host_list_admits "$ip" "${entry##*@}"
+}
+
+# Does any entry after the first three name user $1 from $2? $3 is the answer for
+# an unknowable host part, as in _ssh_user_entry_matches.
+_ssh_user_list_matches() {
+    local user="$1" ip="$2" unknown="$3" entry
+    shift 3
+    for entry in "$@"; do
+        _ssh_user_entry_matches "$user" "$ip" "$entry" "$unknown" && return 0
+    done
+    return 1
+}
+
+# Does any group in $1 (space-separated) match any pattern after it?
+_ssh_groups_match() {
+    local g p
+    local -a groups=()
+    read -ra groups <<<"$1"
+    shift
+    for p in "$@"; do
+        for g in "${groups[@]}"; do _ssh_match_pattern "$g" "$p" && return 0; done
+    done
+    return 1
+}
+
+# Would sshd let $1 in past DenyUsers, AllowUsers, DenyGroups and AllowGroups, its
+# Match blocks applied? A USER@HOST entry is judged against this session's client
+# address; with none usable, or UseDNS on, it fails closed, as does anything unread.
+_ssh_sshd_admits() {
+    local user="$1" dump ip="" glist
+    local -a deny_u=() allow_u=() deny_g=() allow_g=()
+    dump=$(sshd_effective_config "$user") || return 1
+    mapfile -t deny_u < <(_ssh_list_entries denyusers <<<"$dump")
+    mapfile -t allow_u < <(_ssh_list_entries allowusers <<<"$dump")
+    mapfile -t deny_g < <(_ssh_list_entries denygroups <<<"$dump")
+    mapfile -t allow_g < <(_ssh_list_entries allowgroups <<<"$dump")
+    [[ "$(_ssh_list_entries usedns <<<"$dump")" == yes ]] || ip=$(get_current_ssh_ip)
+    validate_ip "$ip" >/dev/null 2>&1 || ip=""
+
+    _ssh_user_list_matches "$user" "$ip" 0 "${deny_u[@]}" && return 1
+    if (( ${#allow_u[@]} )); then
+        _ssh_user_list_matches "$user" "$ip" 1 "${allow_u[@]}" || return 1
+    fi
+    (( ${#deny_g[@]} + ${#allow_g[@]} )) || return 0
+    glist=$(id -Gn -- "$user" 2>/dev/null) || return 1
+    _ssh_groups_match "$glist" "${deny_g[@]}" && return 1
+    (( ${#allow_g[@]} == 0 )) || _ssh_groups_match "$glist" "${allow_g[@]}"
+}
+
 # Can admin $1 still log in and become root once the change lands, with
-# password authentication then $2 (yes|no)? Needs a login-capable account, an
-# auth method sshd still offers, and a usable password or NOPASSWD for sudo.
+# password authentication then $2 (yes|no)? Needs a login-capable account sshd
+# admits, an auth method it still offers, and a usable password or NOPASSWD for sudo.
 _ssh_admin_survives() {
     local user="$1" pw_after="$2" pw_ok=0
     _ssh_account_can_login "$user" || return 1
+    _ssh_sshd_admits "$user" || return 1
     _ssh_password_usable "$user" && pw_ok=1
     if ! [[ "$pw_after" == yes && "$pw_ok" == 1 ]]; then
         _ssh_can_login_with_key "$user" || return 1
@@ -214,54 +351,15 @@ _ssh_surviving_admin() {
     return 1
 }
 
-# Check if SSH access control is configured (AllowUsers/DenyUsers/AllowGroups/DenyGroups)
-_ssh_has_access_control() {
-    local has_control=false
-
-    # Check for AllowUsers
-    local allow_users=$(_ssh_get_config "AllowUsers" "")
-    if [[ -n "$allow_users" ]]; then
-        has_control=true
-    fi
-
-    # Check for AllowGroups
-    local allow_groups=$(_ssh_get_config "AllowGroups" "")
-    if [[ -n "$allow_groups" ]]; then
-        has_control=true
-    fi
-
-    # Check for DenyUsers
-    local deny_users=$(_ssh_get_config "DenyUsers" "")
-    if [[ -n "$deny_users" ]]; then
-        has_control=true
-    fi
-
-    # Check for DenyGroups
-    local deny_groups=$(_ssh_get_config "DenyGroups" "")
-    if [[ -n "$deny_groups" ]]; then
-        has_control=true
-    fi
-
-    $has_control
-}
-
-# Get SSH access control details
+# Each of AllowUsers/AllowGroups/DenyUsers/DenyGroups that is set, with all of its
+# entries ("AllowUsers: a b; "); empty when none is.
 _ssh_get_access_control_info() {
-    local info=()
-
-    local allow_users=$(_ssh_get_config "AllowUsers" "")
-    [[ -n "$allow_users" ]] && info+=("AllowUsers: $allow_users")
-
-    local allow_groups=$(_ssh_get_config "AllowGroups" "")
-    [[ -n "$allow_groups" ]] && info+=("AllowGroups: $allow_groups")
-
-    local deny_users=$(_ssh_get_config "DenyUsers" "")
-    [[ -n "$deny_users" ]] && info+=("DenyUsers: $deny_users")
-
-    local deny_groups=$(_ssh_get_config "DenyGroups" "")
-    [[ -n "$deny_groups" ]] && info+=("DenyGroups: $deny_groups")
-
-    printf '%s; ' "${info[@]}"
+    local dump key entries
+    dump=$(sshd_effective_config) || return 0
+    for key in AllowUsers AllowGroups DenyUsers DenyGroups; do
+        entries=$(_ssh_list_entries "${key,,}" <<<"$dump" | paste -sd' ' -)
+        [[ -z "$entries" ]] || printf '%s: %s; ' "$key" "$entries"
+    done
 }
 
 # One line per key file of the admins $@ whose path StrictModes would refuse,
@@ -708,8 +806,9 @@ _ssh_audit_algorithms() {
 }
 
 _ssh_audit_access_control() {
-    if _ssh_has_access_control; then
-        local control_info=$(_ssh_get_access_control_info)
+    local control_info
+    control_info=$(_ssh_get_access_control_info)
+    if [[ -n "$control_info" ]]; then
         check_emit "ssh.access_control_configured" low passed \
             desc="$control_info"
         print_ok "$(i18n 'ssh.access_control_configured')"
@@ -1294,7 +1393,7 @@ _ssh_fix_disable_password_auth() {
     # while PermitRootLogin permits key auth.
     local survivor=""
     if ! survivor=$(_ssh_surviving_admin no); then
-        if _ssh_can_login_with_key "root"; then
+        if _ssh_sshd_admits root && _ssh_can_login_with_key root; then
             # Root's key is the only way back in — legitimate on a fresh
             # image, but fragile. Warn that disabling root login too would
             # remove this last path.

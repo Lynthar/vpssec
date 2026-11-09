@@ -1,29 +1,39 @@
 # Mutation cases: tests/test_install_data_preserve.bats against install.sh.
 # mutate-suite: install.sh tests/test_install_data_preserve.bats
 #
-# The upgrade data contract: state/, backups/ and templates/ survive a non-git
-# reinstall. `for d in state backups templates; do` appears twice — occurrence
-# 1 is the stash loop, 2 the restore loop.
+# The upgrade data contract: state/, backups/, templates/ and logs/ survive a
+# non-git reinstall. `for d in state backups templates logs; do` appears twice —
+# occurrence 1 is the stash loop, 2 the restore loop.
 
 # Stash walks no data dirs: the round-trip test finds no stash at all.
 run_case "preserve/stash-skips-all" 1 \
-    '    for d in state backups templates; do' \
+    '    for d in state backups templates logs; do' \
     '    for d in; do'
 
 # Restore forgets state/: the round-trip loses ok.json and rmdir fails loudly.
 run_case "preserve/restore-drops-state" 2 \
-    '    for d in state backups templates; do' \
-    '    for d in backups templates; do'
+    '    for d in state backups templates logs; do' \
+    '    for d in backups templates logs; do'
 
 # templates/ is deleted with the old tree: every installed alert hook then
 # sources a file that no longer exists.
 run_case "preserve/stash-drops-templates" 1 \
-    '    for d in state backups templates; do' \
-    '    for d in state backups; do'
+    '    for d in state backups templates logs; do' \
+    '    for d in state backups logs; do'
 
 run_case "preserve/restore-drops-templates" 2 \
-    '    for d in state backups templates; do' \
-    '    for d in state backups; do'
+    '    for d in state backups templates logs; do' \
+    '    for d in state backups logs; do'
+
+# logs/ is deleted with the old tree: the fixes' "Undo for" lines, which rollback
+# points to for what it cannot restore, are gone.
+run_case "preserve/stash-drops-logs" 1 \
+    '    for d in state backups templates logs; do' \
+    '    for d in state backups templates; do'
+
+run_case "preserve/restore-drops-logs" 2 \
+    '    for d in state backups templates logs; do' \
+    '    for d in state backups templates; do'
 
 # The removal primitive stops stashing: the source-order assertion goes red.
 run_case "preserve/remove-without-stash" 1 \

@@ -75,3 +75,16 @@ setup() {
     [ -n "$rm_line" ]
     [ "$stash_line" -lt "$rm_line" ]
 }
+
+@test "logs/ survives a reinstall: each fix's Undo for line is recorded only there" {
+    mkdir -p "$INSTALL_DIR/logs"
+    printf 'Undo for kernel.harden_network: sysctl -w net.ipv4.ip_forward=1\n' \
+        > "$INSTALL_DIR/logs/vpssec.log"
+
+    stash_data_dirs
+    rm -rf "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"/{state,reports,backups,logs,templates}
+    restore_data_dirs
+
+    grep -q '^Undo for kernel.harden_network: ' "$INSTALL_DIR/logs/vpssec.log"
+}

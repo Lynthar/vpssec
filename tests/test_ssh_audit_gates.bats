@@ -91,6 +91,18 @@ _audit() { if ssh_audit; then :; fi; }
     [ -z "$output" ]
 }
 
+@test "ssh access control: the finding names every entry, not the first one sshd prints" {
+    _vpssec_stub_sshd_merging
+    printf 'AllowUsers deploy alice\nAllowUsers carol\nDenyGroups nogo\n' > "$SSH_DROPIN_DIR/50-a.conf"
+    _ssh_audit_access_control
+    [ "$(jq -r '.[] | select(.id == "ssh.access_control_configured") | .desc' "$VPSSEC_STATE/checks.json")" \
+        = "AllowUsers: deploy alice carol; DenyGroups: nogo; " ]
+
+    rm "$SSH_DROPIN_DIR/50-a.conf"
+    _ssh_audit_access_control
+    [ "$(jq -r '.[] | select(.id == "ssh.no_access_control") | .status' "$VPSSEC_STATE/checks.json")" = "failed" ]
+}
+
 @test "ssh algorithms: the fix's check fails when sshd cannot say what it offers" {
     _silent_sshd
     run _ssh_weak_algorithms

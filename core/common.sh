@@ -1046,6 +1046,9 @@ write_file_atomic() {
         log_error "write_file_atomic: refusing empty content for $target"
         return 1
     fi
+    # Content from $(...) has lost its final newline, and without one the next
+    # `echo … >>` joins the file's last line (a sysctl key then fails at boot).
+    [[ "$content" == *$'\n' ]] || content+=$'\n'
 
     # Write content
     if ! printf '%s' "$content" > "$temp_file"; then

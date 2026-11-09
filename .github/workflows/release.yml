@@ -78,10 +78,10 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           VER="${TAG#v}"
           ARCHIVE="vpssec-${VER}.tar.gz"
-          # `git archive` produces a clean, reproducible tarball — matches
-          # `git clone` content at this tag, excludes .git/ and anything in
-          # .gitignore. The prefix gives a single top-level dir on extract.
-          git archive --format=tar.gz \
+          # `git archive`: the tag's tracked files, reproducibly, under one top-level
+          # dir. tar.umask 0022, because git's default 0002 ships every entry
+          # group-writable and install.sh extracts as root.
+          git -c tar.umask=0022 archive --format=tar.gz \
               --prefix="vpssec-${VER}/" \
               -o "$ARCHIVE" \
               "$TAG"

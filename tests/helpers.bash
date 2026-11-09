@@ -180,8 +180,8 @@ _vpssec_fake_etc() {
 }
 
 # Stub sshd so `sshd -T` answers like real sshd: drop-ins in $SSH_DROPIN_DIR by
-# name, then $SSH_CONFIG; first value wins; no Match applies; every key printed,
-# defaulted when unset (else ssh.sh falls back to parsing files). Set paths first.
+# name, then $SSH_CONFIG; first value wins, but Allow/Deny lists add up, one line
+# per entry; no Match applies; every key printed, defaulted when unset. Set paths first.
 _vpssec_stub_sshd_merging() {
     export VPSSEC_TEST_SSH_CONFIG="$SSH_CONFIG" VPSSEC_TEST_SSH_DROPIN_DIR="$SSH_DROPIN_DIR"
     _vpssec_stub_script sshd <<'SH'
@@ -195,6 +195,7 @@ LC_ALL=C awk '
     { k = tolower($1) }
     k == "match" { inmatch = 1; next }
     inmatch || k == "include" { next }
+    k ~ /^(allow|deny)(users|groups)$/ { for (i = 2; i <= NF; i++) l[++n] = k " " $i; next }
     !(k in v) { $1 = ""; sub(/^[[:space:]]+/, ""); v[k] = $0 }
     END {
         d["port"] = "22"; d["permitrootlogin"] = "without-password"
@@ -202,7 +203,7 @@ LC_ALL=C awk '
         d["kbdinteractiveauthentication"] = "yes"; d["usepam"] = "no"
         d["permitemptypasswords"] = "no"; d["authenticationmethods"] = "any"
         d["authorizedkeysfile"] = ".ssh/authorized_keys .ssh/authorized_keys2"
-        d["strictmodes"] = "yes"
+        d["strictmodes"] = "yes"; d["usedns"] = "no"
         for (k in d) if (!(k in v)) v[k] = d[k]
         print "port " v["port"]
         print "listenaddress [::]:" v["port"]
@@ -211,6 +212,7 @@ LC_ALL=C awk '
             if (k == "port") continue
             print k " " (k == "authorizedkeysfile" ? v[k] : tolower(v[k]))
         }
+        for (i = 1; i <= n; i++) print l[i]
     }
 ' "${files[@]}" /dev/null
 SH
