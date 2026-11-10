@@ -37,8 +37,8 @@ setup() {
 }
 
 # fail2ban-client as fail2ban 1.0 and 1.1 behave, with the sshd jail up on the
-# distro's `nftables` action. The jail follows the drop-in's banaction, except
-# that a plain `reload` across a banaction rename leaves it with NO action.
+# distro's `nftables` action and port. The jail follows the drop-in's banaction
+# and port, except a plain `reload` across a banaction rename leaves NO action.
 _f2b_jail_comes_up() {
     printf 'nftables\n' > "$BATS_TEST_TMPDIR/f2b-action"
     _vpssec_stub_script fail2ban-client <<SH
@@ -54,6 +54,10 @@ case "\$*" in
         else
             echo "No actions for jail sshd"
         fi ;;
+    "get sshd action "*" port")
+        port=\$(sed -n 's/^port = //p' "$F2B_DROPIN" 2>/dev/null)
+        echo "\${port:-ssh}" ;;
+    "status ssh"|"get ssh "*) echo "Sorry but the jail 'ssh' does not exist"; exit 255 ;;
 esac
 exit 0
 SH
@@ -77,6 +81,7 @@ _f2b_config_test_fails() {
 case "$*" in
     -t) exit 1 ;;
     "get sshd actions") printf 'The jail sshd has the following actions:\nnftables-multiport\n' ;;
+    "get sshd action nftables-multiport port") echo 2222 ;;
 esac
 exit 0
 SH
@@ -301,6 +306,7 @@ _f2b_dump_ignoreip() {
     _vpssec_stub iptables 0
     _vpssec_stub_script fail2ban-client <<'SH'
 [[ "$*" == "get sshd actions" ]] && printf 'The jail sshd has the following actions:\niptables-multiport\n'
+[[ "$*" == "get sshd action iptables-multiport port" ]] && echo 2222
 exit 0
 SH
     run _f2b_fix_configure_ssh_jail

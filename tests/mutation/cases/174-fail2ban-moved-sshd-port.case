@@ -1,0 +1,49 @@
+# Plant: sshd moved to 2222 under fail2ban's stock sshd jail (port = ssh), with an
+# nftables action this host can run, so the port is the only thing wrong. auth.log as in 171.
+# Expect: fail2ban.ssh_jail_not_banning → fail2ban.configure_ssh_jail →
+# fail2ban.ssh_jail_enabled: the drop-in sets the jail's port to sshd's.
+# Rollback deletes the drop-in and restarts the jail on port ssh: not banning again (rc 0).
+TEST_DESC="sshd on 2222 under a port = ssh jail: fail2ban.configure_ssh_jail converges, rollback puts port ssh back"
+EXPECT_ID="fail2ban.ssh_jail_not_banning"
+EXPECT_STATUS="failed"
+EXPECT_SEVERITY="low"
+MODULE="fail2ban"
+FIX_ID="fail2ban.configure_ssh_jail"
+EXPECT_FIXED_ID="fail2ban.ssh_jail_enabled"
+EXPECT_FIXED_STATUS="passed"
+EXPECT_ROLLBACK_ID="fail2ban.ssh_jail_not_banning"
+EXPECT_ROLLBACK_STATUS="failed"
+EXPECT_ROLLBACK_RC=0
+
+_AUTHLOG="/var/log/auth.log"
+_SSHD_DROPIN="/etc/ssh/sshd_config.d/99-vpssec-mutation-test.conf"
+
+# get_ssh_ports believes an active ssh.socket over sshd's own config.
+precheck() {
+    ! command -v fail2ban-client >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1 &&
+        command -v sshd >/dev/null 2>&1 && [[ -d /etc/ssh/sshd_config.d ]] &&
+        ! systemctl is-active --quiet ssh.socket
+}
+
+mutate() {
+    host_snapshot /etc/fail2ban /var/lib/fail2ban /run/fail2ban /var/log/fail2ban.log \
+        "$_AUTHLOG" "$_SSHD_DROPIN"
+    printf 'Port 2222\n' > "$_SSHD_DROPIN"
+    touch "$_AUTHLOG"
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban >/dev/null 2>&1 || return 1
+    command -v nft >/dev/null 2>&1 || return 1
+    printf '[DEFAULT]\nbanaction = nftables-multiport\n' > /etc/fail2ban/jail.local
+    systemctl restart fail2ban >/dev/null 2>&1
+    local i
+    for i in $(seq 1 20); do
+        fail2ban-client ping >/dev/null 2>&1 && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
+restore() {
+    rm -f /etc/fail2ban/jail.d/99-vpssec-sshd.local /etc/fail2ban/jail.local "$_SSHD_DROPIN"
+    host_restore fail2ban.service
+}

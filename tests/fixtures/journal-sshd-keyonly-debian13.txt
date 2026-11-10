@@ -1,0 +1,20 @@
+Nov 10 16:27:25 localhost sshd[301700]: Server listening on ::1 port 2223.
+Nov 10 16:27:25 localhost sshd[301700]: Server listening on 127.0.0.1 port 2223.
+Nov 10 16:27:25 localhost sshd[301702]: Server listening on ::1 port 2224.
+Nov 10 16:27:25 localhost sshd[301702]: Server listening on 127.0.0.1 port 2224.
+Nov 10 16:27:26 localhost sshd-session[301705]: Invalid user nosuch from 127.0.0.2 port 51519
+Nov 10 16:27:26 localhost sshd-session[301705]: Connection closed by invalid user nosuch 127.0.0.2 port 51519 [preauth]
+Nov 10 16:27:27 localhost sshd-session[301710]: User root from 127.0.0.3 not allowed because not listed in AllowUsers
+Nov 10 16:27:27 localhost sshd-session[301710]: Connection closed by invalid user root 127.0.0.3 port 43159 [preauth]
+Nov 10 16:27:28 localhost sshd-session[301714]: Connection closed by authenticating user lab 127.0.0.4 port 60811 [preauth]
+Nov 10 16:27:29 localhost sshd-session[301719]: error: maximum authentication attempts exceeded for lab from 127.0.0.5 port 41371 ssh2 [preauth]
+Nov 10 16:27:29 localhost sshd-session[301719]: Disconnecting authenticating user lab 127.0.0.5 port 41371: Too many authentication failures [preauth]
+Nov 10 16:27:30 localhost sshd-session[301723]: Accepted publickey for lab from 127.0.0.6 port 36767 ssh2: ED25519 SHA256:yyL3FE41rplbOkyMOR6aHrKZB/giPLx9fQbq0NgMz2A
+Nov 10 16:27:30 localhost sshd-session[301723]: pam_unix(sshd:session): session opened for user lab(uid=1000) by lab(uid=0)
+Nov 10 16:27:30 localhost sshd-session[301731]: Received disconnect from 127.0.0.6 port 36767:11: disconnected by user
+Nov 10 16:27:30 localhost sshd-session[301731]: Disconnected from user lab 127.0.0.6 port 36767
+Nov 10 16:27:30 localhost sshd-session[301723]: pam_unix(sshd:session): session closed for user lab
+Nov 10 16:27:31 localhost sshd-session[301736]: Invalid user ghost from ::1 port 46796
+Nov 10 16:27:31 localhost sshd-session[301736]: Connection closed by invalid user ghost ::1 port 46796 [preauth]
+Nov 10 16:27:32 localhost sshd-session[301740]: Invalid user x 127.0.0.2 port 1 from 127.0.0.11 port 55087
+Nov 10 16:27:32 localhost sshd-session[301740]: Connection closed by invalid user x 127.0.0.2 port 1 127.0.0.11 port 55087 [preauth]

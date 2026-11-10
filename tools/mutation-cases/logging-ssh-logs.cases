@@ -1,0 +1,64 @@
+# Mutation cases: tests/test_logging_ssh_logs.bats against modules/logging.sh.
+# mutate-suite: modules/logging.sh tests/test_logging_ssh_logs.bats
+#
+# The failed-login count is attempts sshd logged plus connections it turned
+# away without logging one; sources are distinct addresses among them.
+
+# Every rejected password counted again for its pam_unix lines.
+run_case "logging/ssh-pam-lines-counted" 1 \
+    '        / Failed [^ ]+ for / { k = conn(); fails[k]++; seen[k] = 1 }' \
+    '        / Failed [^ ]+ for |authentication failure/ { k = conn(); fails[k]++; seen[k] = 1 }'
+
+# A Failed password on a connection that then got in by key is still one.
+run_case "logging/ssh-failed-not-a-connection" 1 \
+    '        / Failed [^ ]+ for / { k = conn(); fails[k]++; seen[k] = 1 }' \
+    '        / Failed [^ ]+ for / { k = conn(); fails[k]++ }'
+
+# One close form at a time: each is the only line some real turned-away
+# connection left (key-only rejections, bots that hang up).
+run_case "logging/ssh-closed-by-ignored" 1 \
+    '        /(Connection closed by|Connection reset by|Disconnected from|Disconnecting) (invalid|authenticating) user / {' \
+    '        /(Connection reset by|Disconnected from|Disconnecting) (invalid|authenticating) user / {'
+
+run_case "logging/ssh-reset-by-ignored" 1 \
+    '        /(Connection closed by|Connection reset by|Disconnected from|Disconnecting) (invalid|authenticating) user / {' \
+    '        /(Connection closed by|Disconnected from|Disconnecting) (invalid|authenticating) user / {'
+
+run_case "logging/ssh-disconnected-from-ignored" 1 \
+    '        /(Connection closed by|Connection reset by|Disconnected from|Disconnecting) (invalid|authenticating) user / {' \
+    '        /(Connection closed by|Connection reset by|Disconnecting) (invalid|authenticating) user / {'
+
+# MaxAuthTries of wrong keys logs no Failed line at the default LogLevel.
+run_case "logging/ssh-disconnecting-ignored" 1 \
+    '        /(Connection closed by|Connection reset by|Disconnected from|Disconnecting) (invalid|authenticating) user / {' \
+    '        /(Connection closed by|Connection reset by|Disconnected from) (invalid|authenticating) user / {'
+
+# Unknown users and users outside AllowUsers both close as "invalid user".
+run_case "logging/ssh-invalid-user-ignored" 1 \
+    '        /(Connection closed by|Connection reset by|Disconnected from|Disconnecting) (invalid|authenticating) user / {' \
+    '        /(Connection closed by|Connection reset by|Disconnected from|Disconnecting) (authenticating) user / {'
+
+run_case "logging/ssh-authenticating-user-ignored" 1 \
+    '        /(Connection closed by|Connection reset by|Disconnected from|Disconnecting) (invalid|authenticating) user / {' \
+    '        /(Connection closed by|Connection reset by|Disconnected from|Disconnecting) (invalid) user / {'
+
+# Counted per connection instead of per rejected credential.
+run_case "logging/ssh-per-connection" 1 \
+    '            for (k in seen) { n += (k in fails) ? fails[k] : 1; split(k, a, " "); hosts[a[1]] = 1 }' \
+    '            for (k in seen) { n += 1; split(k, a, " "); hosts[a[1]] = 1 }'
+
+# Turned-away connections that logged no Failed line count as nothing.
+run_case "logging/ssh-close-only-zero" 1 \
+    '            for (k in seen) { n += (k in fails) ? fails[k] : 1; split(k, a, " "); hosts[a[1]] = 1 }' \
+    '            for (k in seen) { n += fails[k]; split(k, a, " "); hosts[a[1]] = 1 }'
+
+# Every connection its own source.
+run_case "logging/ssh-sources-per-connection" 1 \
+    '            for (k in seen) { n += (k in fails) ? fails[k] : 1; split(k, a, " "); hosts[a[1]] = 1 }' \
+    '            for (k in seen) { n += (k in fails) ? fails[k] : 1; hosts[k] = 1 }'
+
+# First address on the line: a user name "x 127.0.0.2 port 1" then hides its
+# real source behind one already counted.
+run_case "logging/ssh-first-address" 1 \
+    '                at = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)' \
+    '                at = substr(s, RSTART, RLENGTH); s = ""'

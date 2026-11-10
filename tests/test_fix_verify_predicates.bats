@@ -296,41 +296,126 @@ _sysctl_table() {
 # A jail can be up and ban no one: fail2ban still counts the bans. The answers
 # below are fail2ban-client's own output, recorded from 1.0.2 and 1.1.0.
 
-_f2b_jail_actions() {
-    printf '%s\n' "$@" > "$BATS_TEST_TMPDIR/actions"
+# A running sshd jail; each argument is an action, "name" or "name|attr=value|…".
+# `get sshd action <name> <attr>` answers the value; an attribute the action lacks,
+# and any other jail, exit 255 with the real client's message.
+_f2b_jail_has() {
+    local spec name pair names=""
+    local -a pairs
+    : > "$BATS_TEST_TMPDIR/attrs"
+    for spec in "$@"; do
+        name="${spec%%|*}"
+        names+="${names:+, }$name"
+        [[ "$spec" == *"|"* ]] || continue
+        IFS='|' read -ra pairs <<<"${spec#*|}"
+        for pair in "${pairs[@]}"; do
+            printf '%s\t%s\t%s\n' "$name" "${pair%%=*}" "${pair#*=}" >> "$BATS_TEST_TMPDIR/attrs"
+        done
+    done
+    if [[ -n "$names" ]]; then
+        printf 'The jail sshd has the following actions:\n%s\n' "$names"
+    else
+        echo "No actions for jail sshd"
+    fi > "$BATS_TEST_TMPDIR/actions"
     _vpssec_stub_script fail2ban-client <<SH
-[[ "\$*" == "get sshd actions" ]] && cat "$BATS_TEST_TMPDIR/actions"
-exit 0
+if [[ "\$*" == "get sshd actions" ]]; then cat "$BATS_TEST_TMPDIR/actions"; exit 0; fi
+if [[ "\$1 \$2 \$3" == "get sshd action" ]]; then
+    awk -F'\t' -v a="\$4" -v p="\$5" '\$1 == a && \$2 == p { print \$3; f = 1 } END { exit !f }' \
+        "$BATS_TEST_TMPDIR/attrs" && exit 0
+    echo "'CommandAction' object has no attribute '\$5'"
+    exit 255
+fi
+echo "Sorry but the jail '\$2' does not exist"
+exit 255
 SH
 }
 
 @test "fail2ban: a jail left with no action does not ban" {
     source "$(_vpssec_repo_root)/modules/fail2ban.sh"
-    _f2b_jail_actions "No actions for jail sshd"
+    _f2b_jail_has
     _vpssec_refute _f2b_ssh_jail_bans
 }
 
 @test "fail2ban: an action whose firewall tool is missing does not ban" {
     source "$(_vpssec_repo_root)/modules/fail2ban.sh"
+    get_ssh_ports() { echo 22; }
     _vpssec_absent_command iptables
     _vpssec_stub nft 0
-    _f2b_jail_actions "The jail sshd has the following actions:" "iptables-multiport"
+    _f2b_jail_has "iptables-multiport|port=ssh"
     _vpssec_refute _f2b_ssh_jail_bans
 
-    _f2b_jail_actions "The jail sshd has the following actions:" \
-        "nftables-multiport, iptables-allports"
+    _f2b_jail_has "nftables-multiport|port=ssh" "iptables-allports|port=ssh"
     _vpssec_refute _f2b_ssh_jail_bans
 }
 
 @test "fail2ban: an action whose tool is present bans, and so does one vpssec cannot judge" {
     source "$(_vpssec_repo_root)/modules/fail2ban.sh"
+    get_ssh_ports() { echo 22; }
     _vpssec_stub nft 0
-    _f2b_jail_actions "The jail sshd has the following actions:" "nftables-multiport"
+    _f2b_jail_has "nftables-multiport|port=ssh"
     _f2b_ssh_jail_bans
 
-    # A ban that is not a local firewall rule (a CDN, a mail) is the operator's.
-    _f2b_jail_actions "The jail sshd has the following actions:" "cloudflare"
+    # A ban that is not a local firewall rule (a CDN, a mail) is the operator's,
+    # and so is a firewall action with no port to read.
+    _f2b_jail_has "cloudflare"
     _f2b_ssh_jail_bans
+    _f2b_jail_has "nftables-mine"
+    _f2b_ssh_jail_bans
+}
+
+@test "fail2ban: the distro jail on port ssh does not ban an sshd moved off 22" {
+    # Debian 13's stock jail as fail2ban 1.1.0 reports it, sshd listening on 35387.
+    source "$(_vpssec_repo_root)/modules/fail2ban.sh"
+    _vpssec_stub nft 0
+    get_ssh_ports() { echo 35387; }
+    _f2b_jail_has "nftables|port=ssh|protocol=tcp"
+    _vpssec_refute _f2b_ssh_jail_bans
+
+    # vpssec's own drop-in names every sshd port.
+    get_ssh_ports() { printf '22\n35387\n'; }
+    _f2b_jail_has "nftables-multiport|port=22,35387"
+    _f2b_ssh_jail_bans
+}
+
+@test "fail2ban: a port list covers sshd by number, range or service name" {
+    source "$(_vpssec_repo_root)/modules/fail2ban.sh"
+    _vpssec_stub nft 0
+    _vpssec_stub iptables 0
+    get_ssh_ports() { printf '22\n2222\n'; }
+    _f2b_jail_has "iptables-multiport|port=ssh, 2222"
+    _f2b_ssh_jail_bans
+    _f2b_jail_has "nftables-multiport|port=22,35387"
+    _vpssec_refute _f2b_ssh_jail_bans
+
+    get_ssh_ports() { echo 35387; }
+    _f2b_jail_has "nftables-multiport|port=1024:65535"
+    _f2b_ssh_jail_bans
+    get_ssh_ports() { echo 22; }
+    _vpssec_refute _f2b_ssh_jail_bans
+
+    # The firewall tool resolves names the same way: one getent cannot is no port.
+    _f2b_jail_has "nftables-multiport|port=nosuchsvc"
+    _vpssec_refute _f2b_ssh_jail_bans
+}
+
+@test "fail2ban: an all-ports action bans sshd on any port" {
+    source "$(_vpssec_repo_root)/modules/fail2ban.sh"
+    _vpssec_stub nft 0
+    _vpssec_stub iptables 0
+    _vpssec_stub ufw 0
+    _vpssec_stub firewall-cmd 0
+    get_ssh_ports() { echo 35387; }
+    local action
+    for action in "nftables-allports|port=ssh" "nftables|port=ssh|type=allports" \
+        "iptables|port=0:65535|type=multiport" "firewallcmd-ipset|port=ssh|actiontype=<allports>" \
+        "ufw|port=ssh"; do
+        _f2b_jail_has "$action"
+        _f2b_ssh_jail_bans
+    done
+
+    # Rocky 9's fail2ban-firewalld names this banaction_allports, yet it bans by port.
+    _f2b_jail_has "firewallcmd-rich-rules|port=ssh"
+    _vpssec_refute _f2b_ssh_jail_bans
 }
 
 @test "fail2ban.enable_ssh_jail: a loaded jail that bans no one is not enabled" {

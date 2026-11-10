@@ -129,9 +129,46 @@ _f2b_ssh_jail_enabled() {
     fail2ban-client status ssh &>/dev/null
 }
 
-# The SSH jail can ban: it has an action, and each firewall action finds its
-# tool. Both failures are silent in fail2ban — a jail reloaded across a banaction
-# rename has no action, and iptables rules on an nft-only host fail every ban.
+# Every port get_ssh_ports names is in fail2ban port list $1: numbers, a:b
+# ranges, service names. A name getent cannot resolve covers nothing: the
+# firewall tool resolves it the same way, and the ban fails.
+_f2b_port_list_covers() {
+    local item svc p lo hi covered
+    local -a ranges=()
+    while IFS= read -r item; do
+        item="${item//[[:blank:]]/}"
+        if [[ ! "$item" =~ ^[0-9]+(:[0-9]+)?$ ]]; then
+            read -r _ svc _ < <(getent services "$item/tcp") || continue
+            item="${svc%%/*}"
+        fi
+        ranges+=("$item")
+    done < <(tr ',' '\n' <<<"$1")
+    while read -r p; do
+        covered=0
+        for item in "${ranges[@]}"; do
+            lo="${item%%:*}" hi="${item##*:}"
+            (( p >= lo && p <= hi )) && covered=1
+        done
+        (( covered )) || return 1
+    done < <(get_ssh_ports)
+}
+
+# A ban by jail $1's action $2 blocks every port sshd listens on. ufw bans the
+# source on all ports (an application= narrowing that is the operator's choice);
+# an action without a port attribute is not one vpssec can judge.
+_f2b_action_covers_ssh() {
+    local ports
+    [[ "$2" == ufw* || "$2" == *allports* ]] && return 0
+    ports=$(fail2ban-client get "$1" action "$2" port 2>/dev/null) || return 0
+    _f2b_port_list_covers "$ports" && return 0
+    # nftables[type=allports] and firewallcmd-*[actiontype=<allports>] keep the plain name.
+    [[ "$(fail2ban-client get "$1" action "$2" type 2>/dev/null)" == allports ]] ||
+        [[ "$(fail2ban-client get "$1" action "$2" actiontype 2>/dev/null)" == "<allports>" ]]
+}
+
+# The SSH jail can ban: it has an action, and each firewall action finds its tool
+# and covers every sshd port. All three failures are silent in fail2ban: no action
+# after a banaction rename, iptables on an nft-only host, port = ssh on a moved sshd.
 _f2b_ssh_jail_bans() {
     local out="" jail a tool
     for jail in sshd ssh; do
@@ -150,6 +187,7 @@ _f2b_ssh_jail_bans() {
             *)                    continue ;;
         esac
         check_command "$tool" || return 1
+        _f2b_action_covers_ssh "$jail" "$a" || return 1
     done <<<"$actions"
 }
 

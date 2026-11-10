@@ -36,3 +36,58 @@ run_case "bans/iptables-family-unchecked" 1 \
 run_case "bans/header-read-as-action" 1 \
     "    actions=\$(awk '/has the following actions/ { on = 1; next } on' <<<\"\$out\" \\" \
     "    actions=\$(awk '1' <<<\"\$out\" \\"
+
+# A jail on port ssh bans no one at an sshd that listens elsewhere.
+run_case "bans/ports-unchecked" 1 \
+    '        _f2b_action_covers_ssh "$jail" "$a" || return 1' \
+    '        :'
+
+run_case "ports/uncovered-ignored" 1 \
+    '        (( covered )) || return 1' \
+    '        :'
+
+run_case "ports/first-covered-enough" 1 \
+    '        (( covered )) || return 1' \
+    '        (( covered )) && return 0'
+
+# fail2ban keeps the blank after a comma: "ssh, 2222".
+run_case "ports/blank-kept" 1 \
+    '        item="${item//[[:blank:]]/}"' \
+    '        :'
+
+run_case "ports/names-unresolved" 1 \
+    '            read -r _ svc _ < <(getent services "$item/tcp") || continue' \
+    '            continue'
+
+run_case "ports/protocol-kept" 1 \
+    '            item="${svc%%/*}"' \
+    '            item="$svc"'
+
+run_case "ports/range-read-as-port" 1 \
+    '            lo="${item%%:*}" hi="${item##*:}"' \
+    '            lo="$item" hi="$item"'
+
+run_case "covers/ufw-by-port" 1 \
+    '    [[ "$2" == ufw* || "$2" == *allports* ]] && return 0' \
+    '    [[ "$2" == *allports* ]] && return 0'
+
+run_case "covers/allports-name-ignored" 1 \
+    '    [[ "$2" == ufw* || "$2" == *allports* ]] && return 0' \
+    '    [[ "$2" == ufw* ]] && return 0'
+
+# A firewall action with no port attribute is not judged.
+run_case "covers/no-port-attribute-fails" 1 \
+    '    ports=$(fail2ban-client get "$1" action "$2" port 2>/dev/null) || return 0' \
+    '    ports=$(fail2ban-client get "$1" action "$2" port 2>/dev/null) || return 1'
+
+run_case "covers/port-list-ignored" 1 \
+    '    _f2b_port_list_covers "$ports" && return 0' \
+    '    :'
+
+run_case "covers/type-allports-ignored" 1 \
+    '    [[ "$(fail2ban-client get "$1" action "$2" type 2>/dev/null)" == allports ]] ||' \
+    '    false ||'
+
+run_case "covers/actiontype-allports-ignored" 1 \
+    '        [[ "$(fail2ban-client get "$1" action "$2" actiontype 2>/dev/null)" == "<allports>" ]]' \
+    '        false'

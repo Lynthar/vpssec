@@ -119,16 +119,34 @@ _logging_journal_24h() {
     printf '%s\n' "$out"
 }
 
+# Rejected SSH logins over 24 hours as "<attempts> <sources>". An attempt is a
+# credential sshd logged as Failed, or a connection it turned away without one
+# (key-only hosts). pam_unix repeats the Failed lines, so it is never counted.
 _logging_get_failed_logins() {
     # Filters on _COMM (the unit is ssh.service on Debian) and matches BOTH
     # sshd and sshd-session, since OpenSSH 9.8+ logs auth failures from the
     # latter. A query that failed is not zero.
-    local out count
+    local out
     out=$(_logging_journal_24h _COMM=sshd _COMM=sshd-session) || return 1
-    # Note: grep -c outputs "0" AND exits 1 when no matches; `|| count=0`
-    # (not `|| echo 0`) avoids the historical "0\n0" double-output bug.
-    count=$(grep -c "Failed password\|authentication failure" <<<"$out" 2>/dev/null) || count=0
-    echo "${count:-0}"
+    # A connection is the LAST "<host> port <n>" on its line: the user name
+    # comes before the address and may itself contain " port ".
+    awk '
+        function conn(   s, at) {
+            s = $0
+            while (match(s, /[^ ]+ port [0-9]+/)) {
+                at = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+            }
+            return at
+        }
+        / Failed [^ ]+ for / { k = conn(); fails[k]++; seen[k] = 1 }
+        /(Connection closed by|Connection reset by|Disconnected from|Disconnecting) (invalid|authenticating) user / {
+            seen[conn()] = 1
+        }
+        END {
+            for (k in seen) { n += (k in fails) ? fails[k] : 1; split(k, a, " "); hosts[a[1]] = 1 }
+            for (h in hosts) m++
+            print n + 0, m + 0
+        }' <<<"$out"
 }
 
 _logging_get_sudo_events() {
@@ -259,25 +277,26 @@ _logging_audit_auditd() {
 _logging_audit_ssh_logs() {
     # Query failure is its own outcome: "0 failed logins" claims the journal
     # was read and found quiet. Emitted failed + info, like update.check_failed.
-    local failed_logins
-    if ! failed_logins=$(_logging_get_failed_logins); then
+    local counts failed_logins sources
+    if ! counts=$(_logging_get_failed_logins); then
         check_emit "logging.journal_unreadable" low failed \
             desc="$(i18n 'logging.journal_unreadable_desc')" \
             suggestion="$(i18n 'logging.journal_unreadable_fix')"
         print_severity "low" "$(i18n 'logging.journal_unreadable')"
         return 0
     fi
+    read -r failed_logins sources <<<"$counts"
 
     if ((failed_logins > 100)); then
         check_emit "logging.ssh_many_failures" low failed \
             title="$(i18n 'logging.ssh_logs_warning')" \
-            desc="$(i18n 'logging.ssh_logs_warning_desc' "count=$failed_logins")"
-        print_severity "low" "$(i18n 'logging.ssh_logs_high' "count=$failed_logins")"
+            desc="$(i18n 'logging.ssh_logs_warning_desc' "count=$failed_logins" "sources=$sources")"
+        print_severity "low" "$(i18n 'logging.ssh_logs_high' "count=$failed_logins" "sources=$sources")"
     elif ((failed_logins > 20)); then
         check_emit "logging.ssh_some_failures" low failed \
-            title="$(i18n 'logging.ssh_logs_moderate' "count=$failed_logins")" \
-            desc="$(i18n 'logging.ssh_logs_warning_desc' "count=$failed_logins")"
-        print_severity "low" "$(i18n 'logging.ssh_logs_moderate' "count=$failed_logins")"
+            title="$(i18n 'logging.ssh_logs_moderate' "count=$failed_logins" "sources=$sources")" \
+            desc="$(i18n 'logging.ssh_logs_warning_desc' "count=$failed_logins" "sources=$sources")"
+        print_severity "low" "$(i18n 'logging.ssh_logs_moderate' "count=$failed_logins" "sources=$sources")"
     else
         check_emit "logging.ssh_logs_ok" low passed \
             title="$(i18n 'logging.ssh_logs_normal' "count=$failed_logins")"
