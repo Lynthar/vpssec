@@ -384,6 +384,56 @@ SH
     [ "$output" = "$BATS_TEST_TMPDIR/www/blog/.htpasswd" ]
 }
 
+@test "sensitive files: a root nginx serves is walked, through the symlink it names" {
+    # The Capistrano shape: root is current/, a symlink to releases/<ver>/.
+    local site="$BATS_TEST_TMPDIR/srv/site"
+    mkdir -p "$site/releases/v7/config"
+    printf 'DB_PASSWORD=x\n' > "$site/releases/v7/.env"
+    ln -s releases/v7 "$site/current"
+    WEB_ROOTS=("$BATS_TEST_TMPDIR/absent-www")
+    _dump_http "server { listen 80; root $site/current; }"
+    nginx_dump_reset
+    nginx_dump_load
+
+    run _webapp_sensitive_files
+    [ "$output" = "$site/current/.env" ]
+}
+
+@test "sensitive and backup files: a web root that is itself a symlink is walked" {
+    mkdir -p "$BATS_TEST_TMPDIR/data/www"
+    printf 'x\n' > "$BATS_TEST_TMPDIR/data/www/phpinfo.php"
+    printf 'x\n' > "$BATS_TEST_TMPDIR/data/www/site.bak"
+    ln -s data/www "$BATS_TEST_TMPDIR/www"
+    WEB_ROOTS=("$BATS_TEST_TMPDIR/www")
+
+    run _webapp_sensitive_files
+    [ "$output" = "$BATS_TEST_TMPDIR/www/phpinfo.php" ]
+    run _webapp_backup_files
+    [ "$output" = "$BATS_TEST_TMPDIR/www/site.bak" ]
+}
+
+@test "web roots: alias counts, a root with a variable or a relative path does not" {
+    # Run from a directory that has the html/ a relative root would name.
+    mkdir -p "$BATS_TEST_TMPDIR/static" "$BATS_TEST_TMPDIR/html"
+    cd "$BATS_TEST_TMPDIR"
+    WEB_ROOTS=("$BATS_TEST_TMPDIR/absent-www")
+    _dump_http "server { listen 80; root /srv/\$host; location /s/ { alias $BATS_TEST_TMPDIR/static/; } location / { root html; } }"
+    nginx_dump_reset
+    nginx_dump_load
+
+    run _webapp_web_roots
+    [ "$output" = "$BATS_TEST_TMPDIR/static/" ]
+}
+
+@test "backup files: a file under two overlapping roots is reported once" {
+    mkdir -p "$BATS_TEST_TMPDIR/www/html"
+    printf 'x\n' > "$BATS_TEST_TMPDIR/www/html/site.bak"
+    WEB_ROOTS=("$BATS_TEST_TMPDIR/www/html" "$BATS_TEST_TMPDIR/www")
+
+    run _webapp_backup_files
+    [ "$output" = "$BATS_TEST_TMPDIR/www/html/site.bak" ]
+}
+
 # ---- certificate expiry: what nginx serves is checked -------------------------
 
 # A self-signed certificate as `openssl req -x509` makes it, expiring in $2 days.

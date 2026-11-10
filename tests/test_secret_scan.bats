@@ -46,6 +46,14 @@ _scan() { _vpssec_scan_secrets_in_content "$1"; }
     [ "$(_scan "oauth doo_v1_$(_rep 0 64) refresh dor_v1_$(_rep 1 64)")" = "digitalocean_token(x2) " ]
 }
 
+@test "scan: OpenAI project, service-account and admin keys; a bare sk- is not one" {
+    [ "$(_scan "OPENAI_API_KEY=sk-proj-$(_rep a 40)")" = "openai_key(x1) " ]
+    [ "$(_scan "sk-svcacct-$(_rep b 40) sk-admin-$(_rep c 40)")" = "openai_key(x2) " ]
+    run _scan "LEGACY=sk-$(_rep d 48)"
+    [ "$status" -eq 0 ]
+    [ -z "${output// /}" ]
+}
+
 @test "scan: generic password markers are not credentials" {
     run _scan 'MYSQL_ROOT_PASSWORD=hunter2 SECRET=abc'
     [ "$status" -eq 0 ]

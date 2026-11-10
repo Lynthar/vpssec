@@ -514,7 +514,7 @@ _ssh_audit_admin_user() {
         first_admin=$(echo "$admin_users" | head -1)
         check_emit "ssh.admin_user_exists" low passed \
             title="$(i18n 'ssh.admin_user_exists' "user=$first_admin")" \
-            desc="$(i18n 'ssh.admin_user_exists_desc' "admin_users=$admin_users")"
+            desc="$(i18n 'ssh.admin_user_exists_desc' "admin_users=${admin_users//$'\n'/, }")"
         print_ok "$(i18n 'ssh.admin_user_exists' "user=$first_admin")"
 
         # Every admin, so the verdict does not hang on which one sudoers names first.

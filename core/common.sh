@@ -110,6 +110,9 @@ declare -ga _VPSSEC_SECRET_PATTERNS=(
     # a.b.c with base64url segments, the first two JSON objects (eyJ).
     'jwt -E eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+'
     'stripe_live_key -E sk_live_[0-9a-zA-Z]{24,}'
+    # Project, service-account and admin keys. A legacy key is a bare `sk-`: no
+    # fixed prefix, so it is not matched.
+    'openai_key -E sk-(proj|svcacct|admin)-[A-Za-z0-9_-]{20,}'
 )
 
 # Scan for those credentials. Shared by cloud.sh and docker.sh.

@@ -903,14 +903,36 @@ _webapp_ssl_cert_expiry() {
 
 # --- Sensitive File Exposure Check Functions ---
 
-# The web roots that exist, one per line: WEB_ROOTS with its globs expanded.
+# The web roots that exist, one per line, each directory once: WEB_ROOTS with its
+# globs expanded, then every absolute nginx root/alias (one holding a variable names
+# no directory; a relative one is under nginx's prefix, not our working directory).
 _webapp_web_roots() {
     local pattern root
-    for pattern in "${WEB_ROOTS[@]}"; do
-        # shellcheck disable=SC2086 # WEB_ROOTS holds glob patterns to expand
-        for root in $pattern; do
-            if [[ -d "$root" ]]; then printf '%s\n' "$root"; fi
+    {
+        for pattern in "${WEB_ROOTS[@]}"; do
+            # shellcheck disable=SC2086 # WEB_ROOTS holds glob patterns to expand
+            for root in $pattern; do printf '%s\n' "$root"; done
         done
+        if [[ -n "$NGINX_DUMP" ]]; then
+            nginx_statements <<<"$NGINX_DUMP" | awk -F'\t' '
+                ($3 == "root" || $3 == "alias") && $4 ~ /^\// { print $4 }'
+        fi
+    } | while IFS= read -r root; do
+        if [[ -d "$root" ]]; then printf '%s\n' "$root"; fi
+    done | _webapp_unique_real
+}
+
+# The paths on stdin, each real file or directory once: the first name that
+# reaches it is kept. Overlapping roots otherwise report one file twice.
+_webapp_unique_real() {
+    local path real
+    local -A seen=()
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        real=$(readlink -f -- "$path") || real="$path"
+        [[ -z "${seen[$real]:-}" ]] || continue
+        seen[$real]=1
+        printf '%s\n' "$path"
     done
 }
 
@@ -941,12 +963,13 @@ _webapp_sensitive_files() {
         while IFS= read -r -d '' found; do
             [[ "$found" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }
             findings+=("$found")
+        # -H: a root that is a symlink (current -> releases/<ver>) is walked.
         done < <(_fs_run_find "webapp-sensitive" \
-            find "$root" -maxdepth 3 "${prune_args[@]}" \
+            find -H "$root" -maxdepth 3 "${prune_args[@]}" \
             \( "${name_expr[@]}" \) -print0 2>/dev/null)
     done
 
-    printf '%s\n' "${findings[@]}" | sort -u | head -50
+    printf '%s\n' "${findings[@]}" | sort -u | _webapp_unique_real | head -50
     return "$cut"
 }
 
@@ -966,7 +989,7 @@ _webapp_backup_files() {
             [[ "$file" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }
             findings+=("$file")
         done < <(_fs_run_find "webapp-backup" \
-            find "$root" -maxdepth 4 "${prune_args[@]}" \( \
+            find -H "$root" -maxdepth 4 "${prune_args[@]}" \( \
             -name "*.bak" -o \
             -name "*.backup" -o \
             -name "*.old" -o \
@@ -980,7 +1003,7 @@ _webapp_backup_files() {
         \) -type f -print0 2>/dev/null | head -30)
     done
 
-    printf '%s\n' "${findings[@]}"
+    printf '%s\n' "${findings[@]}" | _webapp_unique_real
     return "$cut"
 }
 

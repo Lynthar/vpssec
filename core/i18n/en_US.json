@@ -95,7 +95,7 @@
     "default_port_desc": "SSH running on default port 22",
     "gateway_ports_enabled_desc": "GatewayPorts={val} (forwarded ports bind to wildcard address, exposing tunneled services)",
     "ignore_rhosts_disabled_desc": "IgnoreRhosts={val} (default is yes; setting no re-enables legacy rhosts-based trust)",
-    "log_level_low_desc": "LogLevel={val} (VERBOSE logs fingerprints used at auth time)",
+    "log_level_low_desc": "LogLevel={val} (VERBOSE also logs rejected public key attempts; INFO already logs the accepted key's fingerprint)",
     "login_grace_time_long_desc": "LoginGraceTime={grace_time} (recommended: 60s or less)",
     "max_auth_tries_high_desc": "MaxAuthTries={max_auth} (recommended: 3-4)",
     "max_sessions_high_desc": "MaxSessions={val} (recommended: 4 or less)",

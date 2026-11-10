@@ -245,6 +245,8 @@ SH
     _ssh_audit_admin_user
     [ "$(jq -r '.[] | select(.id == "ssh.admin_no_key") | .title' "$VPSSEC_STATE/checks.json")" = \
       "Admins without a usable SSH key: bob" ]
+    # One line, as in the title above: a newline-joined list breaks the report.
+    [ "$(_finding ssh.admin_user_exists)" = "Admin users: alice, bob" ]
 }
 
 @test "authkeys audit: a 400 key file under a 750 .ssh is clean" {

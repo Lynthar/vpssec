@@ -95,7 +95,7 @@
     "default_port_desc": "SSH 运行在默认端口 22",
     "gateway_ports_enabled_desc": "GatewayPorts={val}（转发端口绑定到通配地址，暴露被隧道的服务）",
     "ignore_rhosts_disabled_desc": "IgnoreRhosts={val}（默认为 yes；设为 no 会重新启用遗留的 rhosts 信任机制）",
-    "log_level_low_desc": "LogLevel={val}（VERBOSE 会记录认证时使用的密钥指纹）",
+    "log_level_low_desc": "LogLevel={val}（VERBOSE 会另外记录被拒绝的公钥尝试；登录成功的密钥指纹 INFO 已经记录）",
     "login_grace_time_long_desc": "LoginGraceTime={grace_time}（建议不超过 60s）",
     "max_auth_tries_high_desc": "MaxAuthTries={max_auth}（建议 3-4）",
     "max_sessions_high_desc": "MaxSessions={val}（建议不超过 4）",
