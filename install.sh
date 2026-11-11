@@ -450,7 +450,7 @@ echo "Uninstalling vpssec from $INSTALL_DIR ..."
 purge="${VPSSEC_UNINSTALL_PURGE:-}"
 if [[ -z "$purge" ]]; then
     reply=""
-    if read -rp "Also remove state and backups? [y/N] " reply 2>/dev/null </dev/tty; then
+    if read -rp "Also remove state, backups and logs? [y/N] " reply 2>/dev/null </dev/tty; then
         :
     else
         # No terminal (piped, cron, CI): keep the data rather than guess.
@@ -481,7 +481,13 @@ if [[ "$purge" != "1" ]]; then
         rm -rf "${keep_dir:?}/state"
         mv "$INSTALL_DIR/state" "$keep_dir/state"
     fi
-    echo "Kept state and backups in $keep_dir"
+    # The log holds the "Undo for" commands rollback cannot run itself: it goes
+    # after what an earlier uninstall kept, never over it.
+    if [[ -f "$INSTALL_DIR/logs/vpssec.log" ]]; then
+        mkdir -p "$keep_dir/logs"
+        cat "$INSTALL_DIR/logs/vpssec.log" >> "$keep_dir/logs/vpssec.log"
+    fi
+    echo "Kept state, backups and logs in $keep_dir"
 fi
 
 rm -f "$BIN_LINK"

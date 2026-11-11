@@ -87,3 +87,12 @@ run_case "keep/clash-check-dropped" 1 \
 run_case "keep/sessions-not-merged" 1 \
     '            mv "$s" "$keep_dir/backups/"' \
     '            :'
+
+# The log's Undo lines survive a keep-uninstall, after any an earlier one kept.
+run_case "keep/log-overwrites-earlier" 1 \
+    '        cat "$INSTALL_DIR/logs/vpssec.log" >> "$keep_dir/logs/vpssec.log"' \
+    '        cat "$INSTALL_DIR/logs/vpssec.log" > "$keep_dir/logs/vpssec.log"'
+
+run_case "keep/log-dropped" 1 \
+    '        cat "$INSTALL_DIR/logs/vpssec.log" >> "$keep_dir/logs/vpssec.log"' \
+    '        :'

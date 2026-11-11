@@ -164,8 +164,8 @@ _ufw_ports_expected() {
     done <<<"$2"
 }
 
-# Detect overly permissive rules (from Anywhere to sensitive ports)
-# Returns: list of problematic rules
+# Inbound rules open to Anywhere, one line each: sensitive ports first, then the
+# others to review. With argument `sensitive`, the sensitive ports only.
 _ufw_find_permissive_rules() {
     local issues=()
 
@@ -206,6 +206,8 @@ _ufw_find_permissive_rules() {
             issues+=("$(i18n 'ufw.f_open_anywhere' "port=$port/udp ($service)")")
         fi
     done
+    # `sensitive` stops here: these alone set the finding's severity.
+    [[ "${1:-}" == sensitive ]] && { printf '%s\n' "${issues[@]}"; return 0; }
 
     # Any other inbound ALLOW/LIMIT from anywhere is listed for review by the port
     # it ends in, an app profile by the ports ufw resolved it to. Not SSH (each
@@ -419,10 +421,13 @@ _ufw_audit_permissive_rules() {
         done <<< "$issues"
         issue_list="${issue_list%; }"
 
-        # Check severity - sensitive database ports are high risk
-        local severity="medium"
-        if echo "$issues" | grep -qE "(MySQL|PostgreSQL|Redis|MongoDB|Elasticsearch|Docker)"; then
-            severity="high"
+        # Review items alone are low: often the services the host exists for. A
+        # sensitive port open to anywhere is medium, a database or Docker one high.
+        local sensitive severity=low
+        sensitive=$(_ufw_find_permissive_rules sensitive)
+        if [[ -n "$sensitive" ]]; then
+            severity=medium
+            grep -qE "(MySQL|PostgreSQL|Redis|MongoDB|Elasticsearch|Docker)" <<<"$sensitive" && severity=high
         fi
 
         check_emit "ufw.permissive_rules" "$severity" failed \

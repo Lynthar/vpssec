@@ -13,7 +13,7 @@ SSH_GOLD=(
     "allow_tcp_forwarding|AllowTcpForwarding|yes|no|NO|yes|ssh.allow_tcp_forwarding_disabled|ssh.allow_tcp_forwarding_enabled|-|-|directive|none|failed"
     "client_alive|ClientAliveCountMax|3|2|2|3|ssh.client_alive_ok|ssh.client_alive_high|-|-|directive|both|failed"
     "log_level|LogLevel|INFO|VERBOSE|verbose|INFO|ssh.log_level_ok|ssh.log_level_low|-|-|directive|none|failed"
-    "max_sessions|MaxSessions|10|4|4|10|ssh.max_sessions_ok|ssh.max_sessions_high|-|-|directive|both|failed"
+    "max_sessions|MaxSessions|10|10|10|11|ssh.max_sessions_ok|ssh.max_sessions_high|-|-|directive|both|passed"
     "tcp_keepalive|TCPKeepAlive|yes|no|no|Yes|ssh.tcp_keepalive_disabled|ssh.tcp_keepalive_enabled|ssh.tcp_keepalive_enabled_suggestion|-|directive|none|failed"
     "agent_forwarding|AllowAgentForwarding|yes|no|no|yes|ssh.agent_forwarding_disabled|ssh.agent_forwarding_enabled|-|-|directive|none|failed"
     "ignore_rhosts|IgnoreRhosts|yes|yes|YES|no|ssh.ignore_rhosts_ok|ssh.ignore_rhosts_disabled|-|-|directive|none|passed"
@@ -137,7 +137,7 @@ _assert_same() {
     for i in "${!EXPECTED_CHECKS[@]}"; do
         case "${EXPECTED_CHECKS[$i]}" in
             "ssh.client_alive_ok"*) EXPECTED_CHECKS[$i]="$(printf '%s\t' ssh.client_alive_high ssh low failed "$(i18n ssh.client_alive_high)" "$(i18n ssh.client_alive_high_desc val=abc)" "$(i18n ssh.suggest_set_directive directive=ClientAliveCountMax value=2)")" ;;
-            "ssh.max_sessions_ok"*) EXPECTED_CHECKS[$i]="$(printf '%s\t' ssh.max_sessions_high ssh low failed "$(i18n ssh.max_sessions_high)" "$(i18n ssh.max_sessions_high_desc val=4x)" "$(i18n ssh.suggest_set_directive directive=MaxSessions value=4)")" ;;
+            "ssh.max_sessions_ok"*) EXPECTED_CHECKS[$i]="$(printf '%s\t' ssh.max_sessions_high ssh low failed "$(i18n ssh.max_sessions_high)" "$(i18n ssh.max_sessions_high_desc val=4x)" "$(i18n ssh.suggest_set_directive directive=MaxSessions value=10)")" ;;
         esac
     done
     for i in "${!EXPECTED_LINES[@]}"; do

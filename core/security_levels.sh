@@ -468,6 +468,7 @@ declare -gA CHECK_SCORE_CATEGORY=(
     ["docker.no_host_network"]="conditional"
     ["docker.default_bridge_icc_enabled"]="conditional"
     ["docker.default_bridge_icc_disabled"]="conditional"
+    ["docker.default_bridge_icc_unused"]="info"     # no container on docker0 to reach
     ["docker.secrets_in_env"]="conditional"
     ["docker.no_env_secrets"]="conditional"
     ["docker.unlimited_memory"]="conditional"

@@ -55,7 +55,7 @@ setup() {
     # after the rm.
     INSTALL_DIR="$fake" create_uninstaller
     local ask_line rm_line
-    ask_line=$(grep -n 'Also remove state and backups' "$fake/uninstall.sh" | head -1 | cut -d: -f1)
+    ask_line=$(grep -n 'Also remove state, backups and logs' "$fake/uninstall.sh" | head -1 | cut -d: -f1)
     rm_line=$(grep -n '^rm -rf' "$fake/uninstall.sh" | head -1 | cut -d: -f1)
     [ -n "$ask_line" ]
     [ -n "$rm_line" ]
@@ -142,6 +142,19 @@ _uninstaller_unguarded() {
     [ "$(cat "$fake.data-kept/backups/20250101_000000/marker")" = "first" ]
     [ "$(cat "$fake.data-kept/backups/20260202_000000/marker")" = "new" ]
     [ ! -e "$fake" ]
+}
+
+@test "uninstaller: keeping data appends the log after what an earlier uninstall kept" {
+    # Its "Undo for" lines are the steps rollback cannot take; the old ones stay.
+    mkdir -p "$fake/logs" "$fake.data-kept/logs"
+    printf 'Undo for kernel.x: old-step\n' > "$fake.data-kept/logs/vpssec.log"
+    printf 'Undo for logging.y: new-step\n' > "$fake/logs/vpssec.log"
+    _uninstaller_unguarded
+
+    run bash "$BATS_TEST_TMPDIR/unguarded.sh" </dev/null
+    [ "$status" -eq 0 ]
+    [ "$(cat "$fake.data-kept/logs/vpssec.log")" = "Undo for kernel.x: old-step
+Undo for logging.y: new-step" ]
 }
 
 @test "uninstaller: a session name already kept stops it before anything is moved" {

@@ -311,3 +311,29 @@ _rhel_unowned() { VPSSEC_DISTRO_FAMILY=rhel; VPSSEC_PKG_MGR=dnf; _vpssec_stub rp
     _fs_audit_world_writable
     [[ "$(_desc filesystem.world_writable)" == *'/srv/a\cb /srv/c /srv/d'* ]]
 }
+
+# ---- world-writable items under a directory others cannot enter -----------------
+
+_sev() {
+    jq -r --arg id "$1" '.[] | select(.id == $id) | .severity' "$VPSSEC_STATE/checks.json"
+}
+
+@test "world-writable items only root can reach are low, and the finding says so" {
+    # A tarball unpacked as root under /root (700) leaves 777 files behind.
+    local root="$BATS_TEST_TMPDIR/root"
+    mkdir -p "$root/lrzsz/src"; chmod 700 "$root"
+    _walk ww "$root/lrzsz/config.h"
+    _walk dirs "$root/lrzsz/src"
+    _fs_audit_world_writable
+    [ "$(_sev filesystem.world_writable)" = "low" ]
+    [ "$(_desc filesystem.world_writable)" = "$(i18n filesystem.world_writable_root_only_desc "items=$root/lrzsz/config.h $root/lrzsz/src ")" ]
+}
+
+@test "one item others can reach keeps the finding medium, the sheltered ones listed apart" {
+    local root="$BATS_TEST_TMPDIR/root"
+    mkdir -p "$root/lrzsz"; chmod 700 "$root"
+    _walk ww /srv/c "$root/lrzsz/config.h"
+    _fs_audit_world_writable
+    [ "$(_sev filesystem.world_writable)" = "medium" ]
+    [ "$(_desc filesystem.world_writable)" = "Items: /srv/c ; $(i18n filesystem.world_writable_root_only_more "items=$root/lrzsz/config.h ")" ]
+}

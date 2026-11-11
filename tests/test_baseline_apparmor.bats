@@ -132,3 +132,55 @@ EOF
     run jq -r '.[] | "\(.id) \(.status) \(.fix_id)"' "$VPSSEC_STATE/checks.json"
     [ "$output" = "baseline.apparmor_disabled failed baseline.enable_apparmor" ]
 }
+
+# ---- complain profiles count only with a process under them ---------------------
+
+# aa-status answering from a real capture (apparmor 4.1.0, Debian 13):
+# tests/fixtures/aa-status-$1.{json,txt}; $2 = nojson for a build without --json.
+_aa_from() {
+    local f
+    f="$(_vpssec_repo_root)/tests/fixtures/aa-status-$1"
+    cat >"$BATS_TEST_TMPDIR/bin/aa-status" <<EOF
+#!/usr/bin/env bash
+[[ "\$1" == "--enabled" ]] && exit 0
+if [[ "\$1" == "--json" ]]; then
+    [[ "${2:-}" == nojson ]] && exit 1
+    cat "$f.json"
+else
+    cat "$f.txt"
+fi
+EOF
+    chmod +x "$BATS_TEST_TMPDIR/bin/aa-status"
+}
+
+# Called in the test's own shell, not in $(...): the language must stay loaded.
+_with_state() {
+    source "$(_vpssec_repo_root)/core/state.sh"
+    i18n_load en_US
+    state_init
+}
+
+_audit_apparmor() {
+    _baseline_audit_apparmor >/dev/null
+    jq -r '[.[] | "\(.id) \(.status) \(.title)"] | join(",")' "$VPSSEC_STATE/checks.json"
+}
+
+@test "apparmor: Debian 13's 23 complain profiles with no process under them are no finding" {
+    _with_state
+    _aa_from debian13
+    [ "$(_baseline_apparmor_complain_attached)" = "0" ]
+    [ "$(_audit_apparmor)" = "baseline.apparmor_enabled passed $(i18n baseline.apparmor_enabled)" ]
+}
+
+@test "apparmor: eight complain profiles with processes under them, more than enforce, are one" {
+    _with_state
+    _aa_from 8procs-debian13
+    [ "$(_audit_apparmor)" = "baseline.apparmor_enabled passed $(i18n baseline.apparmor_enabled),baseline.apparmor_many_complain failed $(i18n baseline.apparmor_many_complain count=8)" ]
+}
+
+@test "apparmor: without --json the text form counts the same profiles" {
+    _aa_from 8procs-debian13 nojson
+    [ "$(_baseline_apparmor_complain_attached)" = "8" ]
+    _aa_from debian13 nojson
+    [ "$(_baseline_apparmor_complain_attached)" = "0" ]
+}

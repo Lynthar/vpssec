@@ -12,6 +12,9 @@ USERS_PWQUALITY_CONF="/etc/security/pwquality.conf"
 # GCP's guest agent: the accounts it created from metadata keys, and its sudo rule.
 USERS_GCP_AGENT_USERS="/var/lib/google/google_users"
 USERS_GCP_SUDOERS="/etc/sudoers.d/google_sudoers"
+# What every login or terminal bash reads; a per-user rc covers one user only.
+declare -ga USERS_SHELL_STARTUP=(/etc/profile /etc/bash.bashrc /etc/bashrc)
+USERS_PROFILE_D="/etc/profile.d"
 
 # System users that should have shells (whitelist)
 declare -ga ALLOWED_SHELL_USERS=(
@@ -168,13 +171,42 @@ _find_system_users_with_shells() {
 # Every way sudoers lets something run without a password, one per line as
 # "<file>: <rule>": rules carrying NOPASSWD and authenticate Defaults turned off.
 # Not those for root alone: sudo never asks root for a password (sudoers(5)).
+# With argument `cmd`, each line is instead the one command the rule names, or "-".
 _find_nopasswd_sudo() {
     local recs
     recs=$(_sudoers_records)
-    awk -F'\t' '
+    CMD="${1:-}" awk -F'\t' '
         function root_only(who) { return who == "+root" || who == "+#0" }
-        $1 == "T" && !root_only($3) { print $2 ": " $4 }
-        $1 == "D" && $5 == "0" && !($3 == "u" && root_only($4)) { print $2 ": " $6 }' <<<"$recs"
+        $1 == "T" && !root_only($3) { print (ENVIRON["CMD"] != "" ? $5 : $2 ": " $4) }
+        $1 == "D" && $5 == "0" && !($3 == "u" && root_only($4)) { print (ENVIRON["CMD"] != "" ? "-" : $2 ": " $6) }' <<<"$recs"
+}
+
+# Shells, interpreters and launchers: as the one sudo command, any runs anything.
+USERS_SUDO_RUNS_ANYTHING='^(ash|bash|busybox|csh|dash|fish|ksh|mksh|sh|tcsh|zsh|env|sudo|sudoedit|su|doas|runuser|xargs|nohup|nice|setsid|script|chroot|timeout|systemd-run|expect|[gmn]?awk|perl.*|python.*|ruby.*|php.*|node|nodejs|lua.*|tclsh.*)$'
+
+# $1 and every directory above it belong to root and only root can write them.
+_users_root_held() {
+    local p="$1" st
+    while :; do
+        st=$(stat -c '%u %a' -- "$p" 2>/dev/null) || return 1
+        [[ "${st%% *}" == 0 ]] && (( (8#${st##* } & 8#022) == 0 )) || return 1
+        [[ "$p" == / ]] && return 0
+        p=$(dirname -- "$p")
+    done
+}
+
+# Every passwordless rule is one command that root alone can change or replace,
+# and that is no shell or interpreter: a deploy hook, not root for the asking.
+_nopasswd_all_narrow() {
+    local cmd path real
+    while IFS= read -r cmd; do
+        path="${cmd%% *}"
+        [[ "$path" == /* ]] || return 1
+        real=$(realpath -e -- "$path" 2>/dev/null) || return 1
+        _users_root_held "$real" && _users_root_held "$(dirname -- "$path")" || return 1
+        [[ "${path##*/}" =~ $USERS_SUDO_RUNS_ANYTHING || "${real##*/}" =~ $USERS_SUDO_RUNS_ANYTHING ]] && return 1
+    done < <(_find_nopasswd_sudo cmd)
+    return 0
 }
 
 # Regex of cloud-init default usernames FOR THE DETECTED PROVIDER; the union
@@ -547,50 +579,14 @@ _check_pwquality() {
 }
 
 # Check bash history security settings
-_check_history_security() {
-    local issues=()
-
-    # Check global profile for HISTSIZE and HISTFILESIZE
-    local histsize=""
-    local histfilesize=""
-
-    # Check /etc/profile and /etc/bash.bashrc
-    for config in /etc/profile /etc/bash.bashrc /etc/profile.d/*.sh; do
-        [[ -f "$config" ]] || continue
-        if [[ -z "$histsize" ]]; then
-            histsize=$(grep -h "^HISTSIZE=" "$config" 2>/dev/null | tail -1 | cut -d= -f2)
-        fi
-        if [[ -z "$histfilesize" ]]; then
-            histfilesize=$(grep -h "^HISTFILESIZE=" "$config" 2>/dev/null | tail -1 | cut -d= -f2)
-        fi
+# Everyone's bash history carries timestamps: a system-wide startup file assigns
+# HISTTIMEFORMAT. Any value counts; once it is set, even empty, bash writes them.
+_users_history_timestamped() {
+    local f
+    for f in "${USERS_SHELL_STARTUP[@]}" "$USERS_PROFILE_D"/*.sh; do
+        grep -qsE '^[[:space:]]*(export[[:space:]]+)?HISTTIMEFORMAT=' "$f" && return 0
     done
-
-    # Check for HISTCONTROL (should include ignorespace or ignoreboth)
-    local histcontrol=""
-    for config in /etc/profile /etc/bash.bashrc; do
-        [[ -f "$config" ]] || continue
-        histcontrol=$(grep -h "^HISTCONTROL=" "$config" 2>/dev/null | tail -1 | cut -d= -f2)
-        [[ -n "$histcontrol" ]] && break
-    done
-
-    # Check for timestamp in history
-    local histtimeformat=""
-    for config in /etc/profile /etc/bash.bashrc; do
-        [[ -f "$config" ]] || continue
-        histtimeformat=$(grep -h "^HISTTIMEFORMAT=" "$config" 2>/dev/null | tail -1)
-        [[ -n "$histtimeformat" ]] && break
-    done
-
-    # Report issues
-    if [[ -z "$histtimeformat" ]]; then
-        issues+=("$(i18n 'users.hist_no_timestamps')")
-    fi
-
-    if [[ -z "$histcontrol" ]] || [[ ! "$histcontrol" =~ ignore ]]; then
-        issues+=("$(i18n 'users.hist_no_ignore')")
-    fi
-
-    printf '%s\n' "${issues[@]}"
+    return 1
 }
 
 # Accounts sharing a non-zero UID: either accidental aliasing or a deliberate
@@ -834,8 +830,8 @@ users_audit() {
     fi
 
     # Cloud images ship NOPASSWD for their default account, so calling every fresh
-    # VM medium destroys the signal: a single cloud-init default user, or GCP's
-    # guest-agent group rule alone, is low; everything else is medium.
+    # VM medium destroys the signal: a single cloud-init default user, GCP's
+    # guest-agent group rule alone, or nothing but root-held single commands is low.
     local nopasswd=$(_find_nopasswd_sudo)
     local nopasswd_count=$(count_lines "$nopasswd")
 
@@ -855,6 +851,9 @@ users_audit() {
         elif _nopasswd_is_gcp_agent_only "$nopasswd"; then
             sev="low"
             title_key="users.nopasswd_sudo_gcp_agent"
+        elif _nopasswd_all_narrow; then
+            sev="low"
+            title_key="users.nopasswd_sudo_single_command"
         fi
 
         check_emit "users.nopasswd_sudo" "$sev" failed \
@@ -998,21 +997,11 @@ users_audit() {
             suggestion="$(i18n 'users.fix_pwquality')"
     fi
 
-    # 11. Check bash history security - LOW
-    local history_issues=$(_check_history_security)
-    local history_count=$(count_lines "$history_issues")
-
-    if [[ -n "$history_issues" && "$history_count" -gt 0 ]]; then
-        local hist_list=""
-        while IFS= read -r issue; do
-            [[ -z "$issue" ]] && continue
-            hist_list+="$issue; "
-        done <<< "$history_issues"
-        hist_list="${hist_list%; }"
-
+    # 11. Bash history timestamps - LOW. HISTCONTROL is not judged: Debian's
+    # skeleton .bashrc ships ignoreboth, and which commands to keep is the operator's.
+    if ! _users_history_timestamped; then
         check_emit "users.history_insecure" low failed \
-            title="$(i18n 'users.history_insecure'): $(i18n 'common.n_issues' "n=$history_count")" \
-            desc="$hist_list" \
+            desc="$(i18n 'users.hist_no_timestamps')" \
             suggestion="$(i18n 'users.fix_history')"
     fi
 

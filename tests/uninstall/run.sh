@@ -16,6 +16,7 @@ mk_install() {           # $1 = dir
     mkdir -p "$1/core" "$1/state" "$1/backups/20260101_000000"
     printf 'ok\n' > "$1/state/ok.json"
     printf 'backed-up\n' > "$1/backups/20260101_000000/marker"
+    mkdir -p "$1/logs"; printf 'Undo for x: new-step\n' > "$1/logs/vpssec.log"
     printf 'code\n' > "$1/core/common.sh"
 }
 
@@ -34,7 +35,8 @@ ck "install dir removed"          "$([[ -e $D ]] && echo yes || echo no)"       
 ck "symlink/bin removed"          "$([[ -e "$T/proof-bin-a" ]] && echo yes || echo no)"    "no"
 ck "backups preserved"            "$(cat $D.data-kept/backups/20260101_000000/marker 2>/dev/null)" "backed-up"
 ck "state preserved"              "$(cat $D.data-kept/state/ok.json 2>/dev/null)"          "ok"
-ck "told the user where"          "$(grep -c 'Kept state and backups' "$T/out1")"          "1"
+ck "log preserved"                "$(cat $D.data-kept/logs/vpssec.log 2>/dev/null)"        "Undo for x: new-step"
+ck "told the user where"          "$(grep -c 'Kept state, backups and logs' "$T/out1")"          "1"
 rm -rf "$D.data-kept"
 
 # ---------------------------------------------------------------- 2
@@ -45,7 +47,7 @@ INSTALL_DIR="$D" BIN_LINK="$T/proof-bin-b" create_uninstaller
 VPSSEC_UNINSTALL_PURGE=1 bash "$D/uninstall.sh" < /dev/null > "$T/out2" 2>&1
 ck "install dir removed"          "$([[ -e $D ]] && echo yes || echo no)"                  "no"
 ck "nothing kept behind"          "$([[ -e $D.data-kept ]] && echo yes || echo no)"        "no"
-ck "did not print the keep line"  "$(grep -c 'Kept state and backups' "$T/out2")"          "0"
+ck "did not print the keep line"  "$(grep -c 'Kept state, backups and logs' "$T/out2")"          "0"
 
 # ---------------------------------------------------------------- 3
 say "3. INSTALL_DIR outside the allowlist: refuses, touches nothing"
@@ -96,10 +98,12 @@ D=/opt/vpssec-proof-f
 mk_install "$D"
 mkdir -p "$D.data-kept/backups/20250101_000000"
 printf 'first-original\n' > "$D.data-kept/backups/20250101_000000/marker"
+mkdir -p "$D.data-kept/logs"; printf 'Undo for y: old-step\n' > "$D.data-kept/logs/vpssec.log"
 INSTALL_DIR="$D" BIN_LINK="$T/proof-bin-f" create_uninstaller
 bash "$D/uninstall.sh" < /dev/null > "$T/out6" 2>&1
 ck "earlier kept session survives" "$(cat $D.data-kept/backups/20250101_000000/marker 2>/dev/null)" "first-original"
 ck "new session joins it"          "$(cat $D.data-kept/backups/20260101_000000/marker 2>/dev/null)" "backed-up"
+ck "log appended after the old one" "$(paste -sd'|' $D.data-kept/logs/vpssec.log 2>/dev/null)" "Undo for y: old-step|Undo for x: new-step"
 rm -rf "$D" "$D.data-kept"
 
 # ---------------------------------------------------------------- 7

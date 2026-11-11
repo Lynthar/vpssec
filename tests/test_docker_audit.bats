@@ -329,3 +329,36 @@ SH
     run _docker_installed
     [ "$status" -eq 0 ]
 }
+
+# ---- ICC on the default bridge ----------------------------------------------
+
+# Docker 29.9's answers about docker0: enable_icc $1 and $2 running containers
+# on it ("fail" for a daemon that cannot say).
+_docker_bridge() {
+    _vpssec_stub_script docker <<SH
+case "\$*" in
+    *enable_icc*) echo "$1" ;;
+    *"len .Containers"*) [[ "$2" == fail ]] && exit 1; echo "$2" ;;
+esac
+exit 0
+SH
+}
+
+@test "icc: on, with no container on docker0, is info and unscored" {
+    # Every compose deployment: its containers sit on networks compose made.
+    _docker_bridge true 0
+    _docker_audit_default_bridge_icc >/dev/null
+    [ "$(_emitted)" = "docker.default_bridge_icc_unused failed" ]
+    [ "${CHECK_SCORE_CATEGORY[docker.default_bridge_icc_unused]}" = "info" ]
+}
+
+@test "icc: on, with containers on docker0 or a count the daemon cannot give, is scored" {
+    _docker_bridge true 2
+    _docker_audit_default_bridge_icc >/dev/null
+    [ "$(_emitted)" = "docker.default_bridge_icc_enabled failed" ]
+
+    state_init
+    _docker_bridge true fail
+    _docker_audit_default_bridge_icc >/dev/null
+    [ "$(_emitted)" = "docker.default_bridge_icc_enabled failed" ]
+}

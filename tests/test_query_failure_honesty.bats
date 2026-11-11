@@ -464,8 +464,19 @@ SH
 
 @test "kernel: Docker's IPv6 forward chains are not an IPv6 firewall" {
     _fw_probes_answer 'exit 0'
+    _nft_ruleset 'table ip filter {' '	chain input {' \
+        '		type filter hook input priority filter; policy drop;' '	}' '}'
     _ip6tables_accepting docker
     [ "$(_kernel_ipv6_fw_emitted)" = "kernel.ipv6_firewall_missing failed" ]
+}
+
+@test "kernel: with no firewall at all, a missing IPv6 one is not a second finding" {
+    # ufw.not_installed / ufw.no_firewall already says it; two mediums were one fact.
+    _fw_probes_answer 'exit 0'
+    _ip6tables_accepting docker
+    run fw_backend
+    [ "$output" = "none" ]
+    [ "$(_kernel_ipv6_fw_emitted)" = "" ]
 }
 
 @test "kernel: an IPv4-only nft table does not filter IPv6" {

@@ -753,6 +753,24 @@ _audit_network() {
     [[ "$(_emitted_field kernel.network_params_medium desc)" == *"net.ipv4.conf.ens18.rp_filter=2"* ]]
 }
 
+@test "interfaces: conf.all.rp_filter=0 below every interface's own 2 is judged nowhere" {
+    # Debian 13 with Docker: systemd's 50-default.conf sets *.rp_filter = 2 and
+    # leaves conf.all at 0, which then decides no interface.
+    i18n_load en_US
+    _host_static_ipv6
+    _forwarding_daemon_active
+    _sysctl_seed net.ipv4.conf.all.rp_filter 0
+    _sysctl_seed net.ipv4.conf.default.rp_filter 2
+    _iface ens18 rp_filter=2
+    _iface docker0 rp_filter=2
+    _kernel_network_params_ok
+
+    # One interface left at 0: conf.all's 0 is the value in force there.
+    _iface veth1 rp_filter=0
+    _audit_network
+    [[ "$(_emitted_field kernel.network_params_medium desc)" == *"net.ipv4.conf.all.rp_filter=0"* ]]
+}
+
 @test "interfaces: an own proxy_arp on a forwarding host is its routing, neither flagged nor fixed" {
     # Calico's host-side veths and a routed hypervisor's bridge answer ARP for
     # what they route: zeroing it cuts every workload behind them off.

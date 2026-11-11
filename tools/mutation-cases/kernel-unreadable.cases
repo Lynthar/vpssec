@@ -26,3 +26,13 @@ run_case "kernel/ipv6-firewall-unreadable-arm-dead" 1 \
 run_case "kernel/ipv6-fw-filtered-reads-unfiltered" 1 \
     '        0) echo "filtered" ;;' \
     '        0) echo "unfiltered" ;;'
+
+# No firewall at all: the missing IPv6 one is the ufw module's finding, not a
+# second medium here; an IPv4-only firewall still gets it.
+run_case "kernel/ipv6-fw-none-reported-twice" 1 \
+    '        1) [[ "$(fw_backend 2>/dev/null)" == none ]] && echo "none" || echo "unfiltered" ;;' \
+    '        1) echo "unfiltered" ;;'
+
+run_case "kernel/ipv6-fw-missing-never" 1 \
+    '        1) [[ "$(fw_backend 2>/dev/null)" == none ]] && echo "none" || echo "unfiltered" ;;' \
+    '        1) echo "none" ;;'

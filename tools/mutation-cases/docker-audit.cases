@@ -127,3 +127,12 @@ run_case "env/sample-not-capped" 1 \
 run_case "userns/stall-reads-as-off" 6 \
     '    elif ! _docker_stalled; then' \
     '    else'
+
+# ICC on docker0 is info only while no running container is attached to it.
+run_case "icc/empty-bridge-scored" 1 \
+    "    elif [[ \"\$(_docker network inspect bridge --format '{{len .Containers}}' 2>/dev/null)\" == 0 ]]; then" \
+    '    elif false; then'
+
+run_case "icc/any-bridge-unscored" 1 \
+    "    elif [[ \"\$(_docker network inspect bridge --format '{{len .Containers}}' 2>/dev/null)\" == 0 ]]; then" \
+    '    elif true; then'

@@ -90,3 +90,20 @@ run_case "permissive/app-ports-unchecked" 1 \
 run_case "permissive/unresolved-app-dropped" 1 \
     '                tok="$to"' \
     '                continue'
+
+# Severity: sensitive ports alone decide it; review items alone are low.
+run_case "severity/review-items-counted" 1 \
+    '    [[ "${1:-}" == sensitive ]] && { printf '"'"'%s\n'"'"' "${issues[@]}"; return 0; }' \
+    '    :'
+
+run_case "severity/review-only-medium" 1 \
+    '        local sensitive severity=low' \
+    '        local sensitive severity=medium'
+
+run_case "severity/sensitive-stays-low" 1 \
+    '            severity=medium' \
+    '            :'
+
+run_case "severity/database-not-high" 1 \
+    '            grep -qE "(MySQL|PostgreSQL|Redis|MongoDB|Elasticsearch|Docker)" <<<"$sensitive" && severity=high' \
+    '            :'

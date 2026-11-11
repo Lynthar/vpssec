@@ -17,6 +17,8 @@ setup() {
     USERS_SHADOW_FILE="$d/shadow"; : > "$USERS_SHADOW_FILE"
     USERS_LOGIN_DEFS="$d/login.defs"; : > "$USERS_LOGIN_DEFS"
     USERS_PWQUALITY_CONF="$d/pwquality.conf"
+    USERS_SHELL_STARTUP=("$d/profile" "$d/bash.bashrc")
+    USERS_PROFILE_D="$d/profile.d"; mkdir -p "$USERS_PROFILE_D"
     SUDOERS_FILE="$d/sudoers"
     printf 'root ALL=(ALL:ALL) ALL\n' > "$SUDOERS_FILE"
 
@@ -117,6 +119,45 @@ S
     ! _emitted users.nopasswd_sudo
 }
 
+_nopasswd() {
+    jq -r '.[] | select(.id == "users.nopasswd_sudo") | "\(.severity) \(.title)"' "$VPSSEC_STATE/checks.json"
+}
+
+@test "users audit: NOPASSWD for one root-held command that is no shell is low" {
+    # A CI deploy hook's shape; /usr/bin/true is root's on every host that runs this.
+    printf 'deploy ALL=(root) NOPASSWD: /usr/bin/true\n' >> "$SUDOERS_FILE"
+    users_audit
+    [ "$(_nopasswd)" = "low $(i18n users.nopasswd_sudo_single_command): 1" ]
+}
+
+@test "users audit: NOPASSWD for a shell, a launcher, a wildcard or two commands stays medium" {
+    local rule
+    for rule in '/bin/sh' '/usr/bin/env' '/usr/bin/true *' '/usr/bin/true, /usr/bin/false' \
+        'SETENV: /usr/bin/true' 'ALL'; do
+        printf 'root ALL=(ALL:ALL) ALL\ndeploy ALL=(root) NOPASSWD: %s\n' "$rule" > "$SUDOERS_FILE"
+        state_init
+        users_audit
+        [ "$(_nopasswd)" = "medium $(i18n users.nopasswd_sudo): 1" ]
+    done
+}
+
+@test "users audit: a chroot the rule names, or a command others can replace, stays medium" {
+    cp /usr/bin/true "$BATS_TEST_TMPDIR/hook"
+    local rule
+    for rule in 'CHROOT=/srv NOPASSWD: /usr/bin/true' "NOPASSWD: $BATS_TEST_TMPDIR/hook"; do
+        printf 'root ALL=(ALL:ALL) ALL\ndeploy ALL=(root) %s\n' "$rule" > "$SUDOERS_FILE"
+        state_init
+        users_audit
+        [ "$(_nopasswd)" = "medium $(i18n users.nopasswd_sudo): 1" ]
+    done
+}
+
+@test "users audit: one narrow rule beside a full one is medium" {
+    printf 'deploy ALL=(root) NOPASSWD: /usr/bin/true\nops ALL=(ALL) NOPASSWD: ALL\n' >> "$SUDOERS_FILE"
+    users_audit
+    [ "$(_nopasswd)" = "medium $(i18n users.nopasswd_sudo): 2" ]
+}
+
 # ---- shells and homes ---------------------------------------------------------
 
 @test "users audit: RHEL's shutdown and halt are not login shells" {
@@ -150,6 +191,27 @@ S
     _account 'odd:x:1500:1500::/:/bin/bash'
     users_audit
     [ "$(_desc users.unusual_home)" = "odd:/" ]
+}
+
+# ---- bash history ----------------------------------------------------------------
+
+@test "users audit: HISTTIMEFORMAT exported from a profile.d script timestamps everyone" {
+    printf '# history\nexport HISTTIMEFORMAT="%%F %%T "\n' > "$USERS_PROFILE_D/history.sh"
+    users_audit
+    _vpssec_refute _emitted users.history_insecure
+}
+
+@test "users audit: an indented HISTTIMEFORMAT in /etc/profile counts too" {
+    printf 'if [ "$PS1" ]; then\n    HISTTIMEFORMAT='"'"'%%F '"'"'\nfi\n' > "${USERS_SHELL_STARTUP[0]}"
+    users_audit
+    _vpssec_refute _emitted users.history_insecure
+}
+
+@test "users audit: HISTCONTROL is not judged; a commented-out HISTTIMEFORMAT is no timestamps" {
+    printf 'HISTCONTROL=ignoreboth\nHISTSIZE=1000\n' > "${USERS_SHELL_STARTUP[1]}"
+    printf '#export HISTTIMEFORMAT="%%F %%T "\n' > "$USERS_PROFILE_D/history.sh"
+    users_audit
+    [ "$(_desc users.history_insecure)" = "$(i18n users.hist_no_timestamps)" ]
 }
 
 # ---- login.defs FAILLOG_ENAB ---------------------------------------------------

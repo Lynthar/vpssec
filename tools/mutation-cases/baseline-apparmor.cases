@@ -1,0 +1,18 @@
+# Mutation cases: tests/test_baseline_apparmor.bats against modules/baseline.sh.
+# mutate-suite: modules/baseline.sh tests/test_baseline_apparmor.bats
+#
+# Complain-mode profiles count toward apparmor_many_complain only with a
+# process running under them, read from aa-status --json or its text form.
+
+# Every loaded complain profile again: stock Debian 13 is reported.
+run_case "complain/loaded-not-attached" 1 \
+    '        if (( attached > enforced && attached > 5 )); then' \
+    '        if (( complain > enforced && complain > 5 )); then'
+
+run_case "complain/json-wrong-mode" 1 \
+    "        jq -er '[.processes[]?[]? | select(.status == \"complain\") | .profile] | unique | length' \\" \
+    "        jq -er '[.processes[]?[]? | select(.status == \"enforce\") | .profile] | unique | length' \\"
+
+run_case "complain/text-lines-ignored" 1 \
+    '         on && /\) / { sub(/.*\) /, ""); seen[$0] = 1 }' \
+    '         on && 0 { }'

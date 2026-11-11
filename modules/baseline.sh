@@ -59,6 +59,23 @@ _baseline_apparmor_count_profiles() {
     echo "${enforced:-0}:${complain:-0}"
 }
 
+# How many complain-mode profiles a running process is under. One no process
+# runs under confines nothing either way: Debian 13 loads 23, for programs
+# mostly not installed. JSON first, the LC_ALL=C text form otherwise.
+_baseline_apparmor_complain_attached() {
+    local json text
+    if json=$(aa-status --json 2>/dev/null) &&
+        jq -er '[.processes[]?[]? | select(.status == "complain") | .profile] | unique | length' \
+            <<<"$json" 2>/dev/null; then
+        return 0
+    fi
+    text=$(LC_ALL=C aa-status 2>/dev/null) || return 1
+    awk '/processes are in complain mode/ { on = 1; next }
+         /^[0-9]+ / { on = 0 }
+         on && /\) / { sub(/.*\) /, ""); seen[$0] = 1 }
+         END { n = 0; for (p in seen) n++; print n }' <<<"$text"
+}
+
 # Names of the profiles under BASELINE_APPARMOR_DISABLE_DIR, one per line.
 # Echoes nothing when the directory is absent or empty, which is the stock
 # state on every distro that ships AppArmor.
@@ -460,13 +477,15 @@ _baseline_audit_apparmor() {
             desc="$(i18n 'baseline.apparmor_enabled_desc' "enforced=${enforced}" "complain=${complain}")"
         print_ok "$(i18n 'baseline.apparmor_enabled') $(i18n 'baseline.apparmor_counts_label' "enforced=${enforced}" "complain=${complain}")"
 
-        # Check if too many profiles in complain mode
-        if [[ "$complain" -gt "$enforced" ]] && [[ "$complain" -gt 5 ]]; then
+        # Many complain profiles that processes actually run under.
+        local attached
+        attached=$(_baseline_apparmor_complain_attached) || attached=0
+        if (( attached > enforced && attached > 5 )); then
             check_emit "baseline.apparmor_many_complain" low failed \
-                title="$(i18n 'baseline.apparmor_many_complain' "count=$complain")" \
+                title="$(i18n 'baseline.apparmor_many_complain' "count=$attached")" \
                 desc="$(i18n 'baseline.apparmor_many_complain_desc')" \
                 suggestion="$(i18n 'baseline.apparmor_many_complain_suggestion')"
-            print_severity "low" "$(i18n 'baseline.apparmor_many_complain' "count=$complain")"
+            print_severity "low" "$(i18n 'baseline.apparmor_many_complain' "count=$attached")"
         fi
     fi
 }

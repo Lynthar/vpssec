@@ -14,7 +14,7 @@ run_case "test/case-sensitive" 1 \
     '        '"'"'='"'"')  [[ "${val,,}" == "${expect,,}" ]] ;;' \
     '        '"'"'='"'"')  [[ "$val" == "$expect" ]] ;;'
 
-# The numeric bound is inclusive (ClientAliveCountMax 2 and MaxSessions 4 pass),
+# The numeric bound is inclusive (ClientAliveCountMax 2 and MaxSessions 10 pass),
 # and a non-number must fail rather than be treated as zero.
 run_case "test/bound-exclusive" 1 \
     '        '"'"'<='"'"') [[ "$val" =~ ^[0-9]+$ ]] && (( val <= expect )) ;;' \

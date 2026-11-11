@@ -872,6 +872,18 @@ _fs_audit_sgid() {
     fi
 }
 
+# A directory above $1 gives others no x, so for now only root (and that
+# directory's owner or group) can reach it. A path that cannot be read is not.
+_fs_sheltered() {
+    local d="${1%/*}" mode
+    while [[ -n "$d" ]]; do
+        mode=$(stat -c '%a' -- "$d" 2>/dev/null) || return 1
+        (( 8#$mode & 1 )) || return 0
+        d="${d%/*}"
+    done
+    return 1
+}
+
 _fs_audit_world_writable() {
     local ww_files walked=1
     ww_files=$(_fs_find_world_writable) || { walked=0; _FS_CUT_WALKS+=(world-writable); }
@@ -883,15 +895,30 @@ _fs_audit_world_writable() {
 
     if ((count > 0 || dir_count > 0)); then
         local total=$((count + dir_count))
-        local items=$(printf '%s\n' "$ww_files" "$ww_dirs" | sed '/^$/d' | head -5 | tr '\n' ' ')
         local shown
         shown=$(_fs_count_shown "$total" \
             $(( count >= FS_MAX_REPORT_ITEMS || dir_count >= FS_MAX_REPORT_ITEMS )))
-        check_emit "filesystem.world_writable" medium failed \
+        # Items only root reaches stay on the list but are low: the tree should
+        # still go, and it is exposed the day a directory above it is opened.
+        local item sev=medium desc
+        local -a open=() shut=()
+        while IFS= read -r item; do
+            [[ -n "$item" ]] || continue
+            if _fs_sheltered "$item"; then shut+=("$item"); else open+=("$item"); fi
+        done < <(printf '%s\n' "$ww_files" "$ww_dirs")
+        if (( ${#open[@]} == 0 )); then
+            sev=low
+            desc=$(i18n 'filesystem.world_writable_root_only_desc' "items=$(printf '%s ' "${shut[@]:0:5}")")
+        else
+            desc=$(i18n 'filesystem.world_writable_desc' "items=$(printf '%s ' "${open[@]:0:5}")")
+            (( ${#shut[@]} == 0 )) ||
+                desc+="; $(i18n 'filesystem.world_writable_root_only_more' "items=$(printf '%s ' "${shut[@]:0:5}")")"
+        fi
+        check_emit "filesystem.world_writable" "$sev" failed \
             title="$(i18n 'filesystem.world_writable' "count=$shown")" \
-            desc="$(i18n 'filesystem.world_writable_desc' "items=$items")" \
+            desc="$desc" \
             suggestion="$(i18n 'filesystem.fix_world_writable')"
-        print_severity "medium" "$(i18n 'filesystem.world_writable' "count=$shown")"
+        print_severity "$sev" "$(i18n 'filesystem.world_writable' "count=$shown")"
     elif (( walked )); then
         check_emit "filesystem.no_world_writable" low passed
         print_ok "$(i18n 'filesystem.no_world_writable')"

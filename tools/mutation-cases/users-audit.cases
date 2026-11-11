@@ -5,21 +5,21 @@
 # deserve, or hides one it does.
 
 run_case "nopasswd/defaults-dropped" 1 \
-    "        \$1 == \"D\" && \$5 == \"0\" && !(\$3 == \"u\" && root_only(\$4)) { print \$2 \": \" \$6 }' <<<\"\$recs\"" \
+    "        \$1 == \"D\" && \$5 == \"0\" && !(\$3 == \"u\" && root_only(\$4)) { print (ENVIRON[\"CMD\"] != \"\" ? \"-\" : \$2 \": \" \$6) }' <<<\"\$recs\"" \
     "        ' <<<\"\$recs\""
 
 run_case "nopasswd/rules-dropped" 1 \
-    '        $1 == "T" && !root_only($3) { print $2 ": " $4 }' \
-    '        $1 == "T" && 0 { print $2 ": " $4 }'
+    '        $1 == "T" && !root_only($3) { print (ENVIRON["CMD"] != "" ? $5 : $2 ": " $4) }' \
+    '        $1 == "T" && 0 { print (ENVIRON["CMD"] != "" ? $5 : $2 ": " $4) }'
 
 # cloud-init's root ALL=(ALL) NOPASSWD:ALL: no effect, since sudo never asks root.
 run_case "nopasswd/root-rule-reported" 1 \
-    '        $1 == "T" && !root_only($3) { print $2 ": " $4 }' \
-    '        $1 == "T" { print $2 ": " $4 }'
+    '        $1 == "T" && !root_only($3) { print (ENVIRON["CMD"] != "" ? $5 : $2 ": " $4) }' \
+    '        $1 == "T" { print (ENVIRON["CMD"] != "" ? $5 : $2 ": " $4) }'
 
 run_case "nopasswd/root-defaults-reported" 1 \
-    "        \$1 == \"D\" && \$5 == \"0\" && !(\$3 == \"u\" && root_only(\$4)) { print \$2 \": \" \$6 }' <<<\"\$recs\"" \
-    "        \$1 == \"D\" && \$5 == \"0\" { print \$2 \": \" \$6 }' <<<\"\$recs\""
+    "        \$1 == \"D\" && \$5 == \"0\" && !(\$3 == \"u\" && root_only(\$4)) { print (ENVIRON[\"CMD\"] != \"\" ? \"-\" : \$2 \": \" \$6) }' <<<\"\$recs\"" \
+    "        \$1 == \"D\" && \$5 == \"0\" { print (ENVIRON[\"CMD\"] != \"\" ? \"-\" : \$2 \": \" \$6) }' <<<\"\$recs\""
 
 run_case "nopasswd/root-beside-others-dropped" 1 \
     '        function root_only(who) { return who == "+root" || who == "+#0" }' \
@@ -151,3 +151,42 @@ run_case "gcp/agent-rule-off-gcp" 1 \
 run_case "gcp/agent-rule-any-file" 1 \
     '        [[ "$1" == "$USERS_GCP_SUDOERS: %google-sudoers ALL=(ALL:ALL) NOPASSWD:ALL" ]]' \
     '        [[ "$1" == *": %google-sudoers ALL=(ALL:ALL) NOPASSWD:ALL" ]]'
+
+# NOPASSWD limited to one root-held command, no shell or interpreter, is low.
+run_case "nopasswd/narrow-never-low" 1 \
+    '        elif _nopasswd_all_narrow; then' \
+    '        elif false; then'
+
+run_case "nopasswd/replaceable-command-low" 1 \
+    '        _users_root_held "$real" && _users_root_held "$(dirname -- "$path")" || return 1' \
+    '        :'
+
+run_case "nopasswd/interpreter-low" 1 \
+    '        [[ "${path##*/}" =~ $USERS_SUDO_RUNS_ANYTHING || "${real##*/}" =~ $USERS_SUDO_RUNS_ANYTHING ]] && return 1' \
+    '        :'
+
+run_case "nopasswd/sticky-dir-root-held" 1 \
+    '        [[ "${st%% *}" == 0 ]] && (( (8#${st##* } & 8#022) == 0 )) || return 1' \
+    '        [[ "${st%% *}" == 0 ]] || return 1'
+
+# Bash history: HISTTIMEFORMAT set in any system-wide startup file, exported or not,
+# indented or not; a commented-out one is none.
+run_case "history/never-reported" 1 \
+    '    if ! _users_history_timestamped; then' \
+    '    if false; then'
+
+run_case "history/profile-d-unread" 1 \
+    '    for f in "${USERS_SHELL_STARTUP[@]}" "$USERS_PROFILE_D"/*.sh; do' \
+    '    for f in "${USERS_SHELL_STARTUP[@]}"; do'
+
+run_case "history/export-missed" 1 \
+    '        grep -qsE '"'"'^[[:space:]]*(export[[:space:]]+)?HISTTIMEFORMAT='"'"' "$f" && return 0' \
+    '        grep -qsE '"'"'^[[:space:]]*HISTTIMEFORMAT='"'"' "$f" && return 0'
+
+run_case "history/indent-missed" 1 \
+    '        grep -qsE '"'"'^[[:space:]]*(export[[:space:]]+)?HISTTIMEFORMAT='"'"' "$f" && return 0' \
+    '        grep -qsE '"'"'^(export[[:space:]]+)?HISTTIMEFORMAT='"'"' "$f" && return 0'
+
+run_case "history/comment-counts" 1 \
+    '        grep -qsE '"'"'^[[:space:]]*(export[[:space:]]+)?HISTTIMEFORMAT='"'"' "$f" && return 0' \
+    '        grep -qsE '"'"'[[:space:]]*(export[[:space:]]+)?HISTTIMEFORMAT='"'"' "$f" && return 0'

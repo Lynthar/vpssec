@@ -1,0 +1,25 @@
+# Mutation cases: tests/test_users_audit.bats against core/common.sh.
+# mutate-suite: core/common.sh tests/test_users_audit.bats
+#
+# The one command a NOPASSWD rule names, which users_audit may then judge
+# narrow: never when the rule names two, a wildcard, SETENV or a CHROOT.
+
+run_case "nopasswd-cmd/two-commands-one" 1 \
+    '                if (nn != 1 || wide || one !~ /^\// || one ~ /[][*?\\]/) one = "-"' \
+    '                if (wide || one !~ /^\// || one ~ /[][*?\\]/) one = "-"'
+
+run_case "nopasswd-cmd/wildcard-kept" 1 \
+    '                if (nn != 1 || wide || one !~ /^\// || one ~ /[][*?\\]/) one = "-"' \
+    '                if (nn != 1 || wide || one !~ /^\//) one = "-"'
+
+run_case "nopasswd-cmd/setenv-ignored" 1 \
+    '                        else if (tg == "SETENV") setenv = 1; else if (tg == "NOSETENV") setenv = 0' \
+    '                        else if (tg == "NOSETENV") setenv = 0'
+
+run_case "nopasswd-cmd/chroot-ignored" 1 \
+    '                        if (substr(c, 1, 7) == "CHROOT=") chroot = 1' \
+    '                        chroot = chroot'
+
+run_case "nopasswd-cmd/never-counted" 1 \
+    '                    if (auth == "N") { anyn = 1; nn++; one = c; if (setenv || chroot) wide = 1 }' \
+    '                    if (auth == "N") { anyn = 1; one = c; if (setenv || chroot) wide = 1 }'

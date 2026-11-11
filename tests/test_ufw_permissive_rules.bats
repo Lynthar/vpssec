@@ -6,10 +6,11 @@
 load helpers.bash
 
 setup() {
-    _vpssec_load
+    _vpssec_load core/state.sh core/security_levels.sh
     # shellcheck source=/dev/null
     source "$(_vpssec_repo_root)/modules/ufw.sh"
     i18n_load en_US
+    state_init
     unset LC_ALL
     export VPSSEC_TEST_UFW_STATUS="$(_vpssec_repo_root)/tests/fixtures/ufw-status-debian12.txt"
     # sshd on 22 unless a test moves it: SSH's own rules are never "permissive".
@@ -128,4 +129,27 @@ Anywhere open to Anywhere (review if needed)
     UFW_USER_RULES="$BATS_TEST_TMPDIR/absent/user.rules"
     run _ufw_find_permissive_rules
     [[ "$output" == *"OpenSSH open to Anywhere (review if needed)"* ]]
+}
+
+# ---- severity ------------------------------------------------------------------
+
+_severity() {
+    _ufw_audit_permissive_rules >/dev/null
+    jq -r '.[] | select(.id == "ufw.permissive_rules") | .severity' "$VPSSEC_STATE/checks.json"
+}
+
+@test "permissive rules: a database port open to anywhere is high" {
+    [ "$(_severity)" = "high" ]
+}
+
+@test "permissive rules: a sensitive port that is not a database is medium" {
+    # Real ufw 0.36.2: 8080 is on the sensitive list, 51820/udp only for review.
+    VPSSEC_TEST_UFW_STATUS="$(_vpssec_repo_root)/tests/fixtures/ufw-status-proxy-debian12.txt"
+    [ "$(_severity)" = "medium" ]
+}
+
+@test "permissive rules: only rules to review is low" {
+    # The services a host exists for (XMPP, TURN) land here.
+    _apps_host
+    [ "$(_severity)" = "low" ]
 }

@@ -366,3 +366,18 @@ run_case "iface/ipv4-enslaved-judged" 2 \
 run_case "iface/every-link-enslaved" 1 \
     '    [[ -e "$KERNEL_SYS_CLASS_NET/$1/master" ]]' \
     '    true'
+
+# conf.all.rp_filter is judged only where it is in force: at or above some
+# interface's own value.
+run_case "rp-all/judged-when-moot" 1 \
+    '            ! _kernel_rp_all_in_force "$actual"; then' \
+    '            false; then'
+
+run_case "rp-all/never-judged" 1 \
+    '        (( value <= $1 )) && return 0' \
+    '        :'
+
+# No interface to weigh it against: conf.all is judged, and fixed, as before.
+run_case "rp-all/no-interface-moot" 1 \
+    '    (( ! seen ))' \
+    '    false'

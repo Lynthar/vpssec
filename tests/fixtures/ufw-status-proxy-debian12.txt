@@ -1,0 +1,11 @@
+Status: active
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     ALLOW       Anywhere                  
+8080/tcp                   ALLOW       Anywhere                  
+51820/udp                  ALLOW       Anywhere                  
+22/tcp (v6)                ALLOW       Anywhere (v6)             
+8080/tcp (v6)              ALLOW       Anywhere (v6)             
+51820/udp (v6)             ALLOW       Anywhere (v6)             
+

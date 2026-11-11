@@ -377,14 +377,15 @@ _kernel_ipv6_secure() {
     _kernel_ipv6_issues_ok "$in_use" "$count"
 }
 
-# IPv6 firewall state for the audit: filtered | unfiltered | unknown. The
-# backend is fw_backend's answer, so this check and the ufw module agree.
+# IPv6 firewall state for the audit: filtered | unfiltered | none | unknown. The
+# backend is fw_backend's answer, so this check and the ufw module agree. With no
+# firewall at all it is "none": one finding, ufw.not_installed / ufw.no_firewall.
 _kernel_ipv6_firewall_check() {
     local rc=0
     fw_ipv6_filtered || rc=$?
     case "$rc" in
         0) echo "filtered" ;;
-        1) echo "unfiltered" ;;
+        1) [[ "$(fw_backend 2>/dev/null)" == none ]] && echo "none" || echo "unfiltered" ;;
         *) echo "unknown" ;;
     esac
 }
@@ -736,6 +737,12 @@ _kernel_param_scan() {
 
         rc=0
         actual=$(_kernel_check_param "$param" "$expected") || rc=$?
+        # Below every interface's own rp_filter, conf.all is in force nowhere
+        # (systemd's 50-default.conf sets each to 2 and leaves all at 0).
+        if (( rc == 1 )) && [[ "$param" == net.ipv4.conf.all.rp_filter ]] &&
+            ! _kernel_rp_all_in_force "$actual"; then
+            rc=0
+        fi
         case "$rc" in
             0) echo "ok - $param" ;;
             1) echo "bad $severity $param $expected $actual" ;;
@@ -751,11 +758,25 @@ _kernel_param_scan() {
 # other conf.all key is ANDed, so conf.all alone decides it.
 KERNEL_IFACE_KEYS='^(send_redirects|secure_redirects|proxy_arp|accept_redirects|rp_filter)$'
 
+# The IPv4 interfaces whose own conf values the kernel weighs, one per line: not
+# all, default or lo, nor a link enslaved to a bond or bridge (it governs no traffic).
+_kernel_ipv4_ifaces() {
+    local dir name
+    for dir in "$KERNEL_IPV4_CONF_DIR"/*/; do
+        [[ -d "$dir" ]] || continue
+        name="${dir%/}"
+        name="${name##*/}"
+        case "$name" in all|default|lo) continue ;; esac
+        _kernel_iface_enslaved "$name" && continue
+        echo "$name"
+    done
+}
+
 # A "bad" scan line for each interface whose own value of conf.all key $1 is the
 # one in force there and misses $3; $2 is the severity. An interface stops following
 # default once it has an IPv4 address, so all/default can read hardened while it does not.
 _kernel_iface_scan() {
-    local key="$1" severity="$2" expected="$3" dir name param value all=0
+    local key="$1" severity="$2" expected="$3" name param value all=0
     [[ "$key" =~ $KERNEL_IFACE_KEYS ]] || return 0
     # On a forwarding host an interface's own proxy_arp is part of what it routes
     # (Calico's veths, a routed hypervisor's bridge): zeroing it cuts those off.
@@ -764,12 +785,7 @@ _kernel_iface_scan() {
         all=$(_kernel_get_sysctl net.ipv4.conf.all.rp_filter) || true
         [[ "$all" =~ ^[0-9]+$ ]] || all=0
     fi
-    for dir in "$KERNEL_IPV4_CONF_DIR"/*/; do
-        [[ -d "$dir" ]] || continue
-        name="${dir%/}"
-        name="${name##*/}"
-        case "$name" in all|default|lo) continue ;; esac
-        _kernel_iface_enslaved "$name" && continue
+    while IFS= read -r name; do
         # sysctl takes a dot inside an interface name (eth0.100) as a slash.
         param="net.ipv4.conf.${name//./\/}.$key"
         value=$(_kernel_get_sysctl "$param") || true
@@ -781,7 +797,22 @@ _kernel_iface_scan() {
                 [[ "$(_kernel_get_sysctl "net.ipv4.conf.${name//./\/}.forwarding")" == 1 ]] && continue ;;
         esac
         echo "bad $severity $param $expected $value"
-    done
+    done < <(_kernel_ipv4_ifaces)
+}
+
+# conf.all.rp_filter at $1 is in force on some interface: the kernel takes the
+# larger of it and the interface's own value. An interface it cannot read, or
+# none to read at all, counts as in force.
+_kernel_rp_all_in_force() {
+    local name value seen=0
+    [[ "$1" =~ ^[0-9]+$ ]] || return 0
+    while IFS= read -r name; do
+        seen=1
+        value=$(_kernel_get_sysctl "net.ipv4.conf.${name//./\/}.rp_filter") || return 0
+        [[ "$value" =~ ^[0-9]+$ ]] || return 0
+        (( value <= $1 )) && return 0
+    done < <(_kernel_ipv4_ifaces)
+    (( ! seen ))
 }
 
 # Pass conditions of the two param checks. The network one also needs one

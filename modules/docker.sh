@@ -613,6 +613,14 @@ _docker_audit_default_bridge_icc() {
     if _docker_check_icc_disabled; then
         check_emit "docker.default_bridge_icc_disabled" low passed
         print_ok "$(i18n 'docker.default_bridge_icc_disabled')"
+    elif [[ "$(_docker network inspect bridge --format '{{len .Containers}}' 2>/dev/null)" == 0 ]]; then
+        # No running container on docker0 for ICC to expose (a compose network has
+        # its own option); one started later with plain `docker run` lands here.
+        # A daemon that cannot count keeps the scored finding.
+        check_emit "docker.default_bridge_icc_unused" low failed \
+            desc="$(i18n 'docker.default_bridge_icc_unused_desc')" \
+            suggestion="$(i18n 'docker.fix_default_bridge_icc')"
+        print_info "$(i18n 'docker.default_bridge_icc_unused')"
     else
         check_emit "docker.default_bridge_icc_enabled" low failed \
             desc="$(i18n 'docker.default_bridge_icc_enabled_desc')" \

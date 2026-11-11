@@ -54,6 +54,23 @@ _scan() { _vpssec_scan_secrets_in_content "$1"; }
     [ -z "${output// /}" ]
 }
 
+@test "scan: a Telegram bot token, as env, JSON or two on a line" {
+    local t="1234567890:AA$(_rep h 33)"
+    [ "$(_scan "TELEGRAM_BOT_TOKEN=$t")" = "telegram_bot_token(x1) " ]
+    [ "$(_scan "{\"token\": \"$t\"}")" = "telegram_bot_token(x1) " ]
+    [ "$(_scan "tokens: $t 123456789:AH$(_rep k 33)")" = "telegram_bot_token(x2) " ]
+}
+
+@test "scan: digits, a colon and an A are not a Telegram token without its shape" {
+    local s
+    for s in "12345678901234567:A$(_rep h 34)" "1234:A$(_rep h 34)" \
+        "1234567890:A$(_rep h 33)" "1234567890:a$(_rep h 34)"; do
+        run _scan "id=$s"
+        [ "$status" -eq 0 ]
+        [ -z "${output// /}" ]
+    done
+}
+
 @test "scan: generic password markers are not credentials" {
     run _scan 'MYSQL_ROOT_PASSWORD=hunter2 SECRET=abc'
     [ "$status" -eq 0 ]

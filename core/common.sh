@@ -88,8 +88,8 @@ vpssec_cloud_tier() {
 }
 
 # Known-format credentials, one "<kind> <grep flags> <ERE>" each. Vendor-fixed
-# prefixes and PEM headers only, for near-zero false positives: generic
-# PASSWORD= / SECRET= markers are deliberately absent.
+# prefixes and PEM headers only, for near-zero false positives (generic PASSWORD= /
+# SECRET= markers are absent); Telegram's prefixless shape is the one exception.
 declare -ga _VPSSEC_SECRET_PATTERNS=(
     # PEM keys of any flavor, and PGP's armor, whose header ends "KEY BLOCK".
     'private_key -E -----BEGIN[[:space:]]+(RSA|OPENSSH|EC|DSA|ENCRYPTED|PGP)?[[:space:]]?PRIVATE[[:space:]]+KEY([[:space:]]+BLOCK)?-----'
@@ -113,6 +113,9 @@ declare -ga _VPSSEC_SECRET_PATTERNS=(
     # Project, service-account and admin keys. A legacy key is a bare `sk-`: no
     # fixed prefix, so it is not matched.
     'openai_key -E sk-(proj|svcacct|admin)-[A-Za-z0-9_-]{20,}'
+    # Bot id, colon, a 35-character secret starting with A (gitleaks' shape): rare
+    # enough by chance to stand in for a prefix. Discord's tokens are not.
+    'telegram_bot_token -E (^|[^0-9])[0-9]{5,16}:A[A-Za-z0-9_-]{34}'
 )
 
 # Scan for those credentials. Shared by cloud.sh and docker.sh.
@@ -1382,8 +1385,8 @@ _sudo_is_rs() {
 }
 
 # sudoers as tab-separated records in sudo's reading order; "-" stands for an
-# empty field, which read's IFS would swallow. G file who N|P|- text: all commands
-# as root; T file who text: NOPASSWD; D file g|u|r|c who 0|1 text (none on sudo-rs).
+# empty field, which read's IFS would swallow. G file who N|P|- text: all commands as
+# root; T file who text cmd|-: NOPASSWD; D file g|u|r|c who 0|1 text (none on sudo-rs).
 _sudoers_records() {
     local rs=""
     _sudo_is_rs && rs=1
@@ -1510,6 +1513,7 @@ _sudoers_records() {
                     continue
                 }
                 runas = "\001"; auth = "-"; anyn = 0; full = 0; fauth = "-"
+                setenv = 0; wide = 0; nn = 0; one = ""
                 m = specs(f[4], sp_)
                 for (j = 1; j <= m; j++) {
                     c = sp_[j]; sub(/^ /, "", c)
@@ -1517,18 +1521,26 @@ _sudoers_records() {
                         q = index(c, ")"); if (!q) break
                         runas = substr(c, 2, q - 2); c = substr(c, q + 1); sub(/^ /, "", c)
                     }
-                    while (match(c, /^[A-Z_]+=[^ ]* /)) c = substr(c, RLENGTH + 1)
+                    chroot = 0
+                    while (match(c, /^[A-Z_]+=[^ ]* /)) {
+                        if (substr(c, 1, 7) == "CHROOT=") chroot = 1
+                        c = substr(c, RLENGTH + 1)
+                    }
                     while (match(c, /^[A-Z_]+:/) && (substr(c, 1, RLENGTH - 1) in TAG)) {
                         tg = substr(c, 1, RLENGTH - 1)
                         if (tg == "NOPASSWD") auth = "N"; else if (tg == "PASSWD") auth = "P"
+                        else if (tg == "SETENV") setenv = 1; else if (tg == "NOSETENV") setenv = 0
                         c = substr(c, RLENGTH + 1); sub(/^ /, "", c)
                     }
-                    if (auth == "N") anyn = 1
+                    if (auth == "N") { anyn = 1; nn++; one = c; if (setenv || chroot) wide = 1 }
                     if (cmnd_full(c, 0) && runas_root(runas)) { full = 1; fauth = auth }
                 }
+                # The one command a NOPASSWD rule names, when it is a plain path:
+                # no wildcard, and no environment or chroot the caller picks.
+                if (nn != 1 || wide || one !~ /^\// || one ~ /[][*?\\]/) one = "-"
                 pr = principals(f[3], "U", 0); if (pr == "") pr = "-"
                 if (full) print "G\t" f[2] "\t" pr "\t" fauth "\t" f[5]
-                if (anyn) print "T\t" f[2] "\t" pr "\t" f[5]
+                if (anyn) print "T\t" f[2] "\t" pr "\t" f[5] "\t" one
             }
         }'
 }
