@@ -38,6 +38,7 @@ case "$*" in
     *"-perm -2000"*) f=sgid ;;
     *"-type d"*)     f=dirs ;;
     *"-perm -0002"*) f=ww ;;
+    *"-nouser"*)     f=noowner ;;
     *) f=none ;;
 esac
 cat "$d/walk-$f" 2>/dev/null
@@ -336,4 +337,49 @@ _sev() {
     _fs_audit_world_writable
     [ "$(_sev filesystem.world_writable)" = "medium" ]
     [ "$(_desc filesystem.world_writable)" = "Items: /srv/c ; $(i18n filesystem.world_writable_root_only_more "items=$root/lrzsz/config.h ")" ]
+}
+
+# ---- files with no owner in a running container's mounts --------------------------
+
+# docker ps -q / inspect answering with these lines of the mounts template, as
+# Debian 13's docker.io 26.1.5 printed them (name, then each writable source).
+_containers_mounting() {
+    printf '%s\n' "$@" > "$BATS_TEST_TMPDIR/mounts"
+    _vpssec_stub_script docker <<'SH'
+case "$1" in
+    ps) echo c1 ;;
+    inspect) cat "$TMPDIR/mounts" ;;
+esac
+exit 0
+SH
+}
+
+@test "no owner: files in a running container's writable mount are listed apart, unscored" {
+    # redis su-execs to 999 under userns-remap, so /srv/xdata2 is 166535 on the
+    # host. A name that only starts like the source, and a host root mounted in,
+    # leave the rest the host's.
+    _walk noowner /srv/xdata2 /srv/xdata2/dump.rdb /srv/xdata20 /opt/orphan
+    _containers_mounting $'/xro\t/etc/hostname' $'/xredis2\t/srv/xdata2' /xroot2 $'/node\t/'
+    _fs_audit_no_owner
+    [ "$(_check filesystem.no_owner)" = "failed $(i18n filesystem.no_owner count=2)" ]
+    [ "$(_desc filesystem.no_owner)" = "Files: /srv/xdata20 /opt/orphan " ]
+    [ "$(_check filesystem.no_owner_container_data)" = "failed $(i18n filesystem.no_owner_container_data count=2)" ]
+    [ "$(_desc filesystem.no_owner_container_data)" = "$(i18n filesystem.no_owner_container_data_desc 'list=xredis2: /srv/xdata2 (2)')" ]
+    [ "${CHECK_SCORE_CATEGORY[filesystem.no_owner_container_data]}" = "info" ]
+}
+
+@test "no owner: container data alone raises no scored finding and no all-clear" {
+    _walk noowner /srv/xdata2/dump.rdb
+    _containers_mounting $'/xredis2\t/srv/xdata2'
+    _fs_audit_no_owner
+    _vpssec_refute grep -qE '"filesystem\.(no_owner|owner_ok)"' "$VPSSEC_STATE/checks.json"
+    [ "$(_check filesystem.no_owner_container_data)" = "failed $(i18n filesystem.no_owner_container_data count=1)" ]
+}
+
+@test "no owner: with no docker to ask, every file stays the host's" {
+    _walk noowner /srv/xdata2/dump.rdb
+    _vpssec_absent_command docker
+    _fs_audit_no_owner
+    [ "$(_check filesystem.no_owner)" = "failed $(i18n filesystem.no_owner count=1)" ]
+    _vpssec_refute grep -q no_owner_container_data "$VPSSEC_STATE/checks.json"
 }

@@ -334,7 +334,8 @@ _webapp_nginx_header_targets() {
 }
 
 # Print the lowercased names of the headers $1 answers with (curl --resolve $2,
-# or -), comma-joined, following same-origin redirects up to three. 0 = a page;
+# or -), comma-joined, following same-origin redirects up to three; and
+# csp:frame-ancestors when an enforced CSP holds that directive. 0 = a page;
 # 1 = no page (empty reply, redirect elsewhere); 2 = curl failed, its code printed.
 _webapp_probe_headers() {
     local url="$1" origin="" out rc hops=0 code location names
@@ -347,11 +348,18 @@ _webapp_probe_headers() {
         (( rc != 52 )) || return 1
         (( rc == 0 )) || { echo "$rc"; return 2; }
         { read -r code; read -r location; read -r names; } < <(LC_ALL=C awk '
+            # Does CSP value v hold a frame-ancestors directive (names are case-insensitive)?
+            function ancestors(v,   d, k, j, w) {
+                k = split(tolower(v), d, ";")
+                for (j = 1; j <= k; j++) if (split(d[j], w, " ") && w[1] == "frame-ancestors") return 1
+                return 0
+            }
             { sub(/\r$/, "") }
             /^HTTP\// { split($0, f, " "); code = f[2]; loc = ""; names = ""; next }
             (i = index($0, ":")) > 1 {
                 n = tolower(substr($0, 1, i - 1))
                 if (n == "location") { loc = substr($0, i + 1); sub(/^[ \t]+/, "", loc) }
+                if (n == "content-security-policy" && ancestors(substr($0, i + 1))) n = n ",csp:frame-ancestors"
                 names = names (names == "" ? "" : ",") n
             }
             END { print code; print loc; print names }
@@ -396,7 +404,10 @@ _webapp_nginx_header_results() {
         esac
         missing=()
         for header in "${keys[@]}"; do
-            [[ ",$out," == *",${header,,},"* ]] || missing+=("$header")
+            [[ ",$out," == *",${header,,},"* ]] && continue
+            # Browsers ignore X-Frame-Options under an enforced CSP frame-ancestors.
+            [[ "$header" == X-Frame-Options && ",$out," == *",csp:frame-ancestors,"* ]] && continue
+            missing+=("$header")
         done
         if (( ${#missing[@]} == 0 )); then
             printf 'ok\t%s\n' "$where"
@@ -1474,7 +1485,7 @@ _webapp_fix_nginx_security_headers() {
     print_info "$(i18n 'webapp.adding_headers')"
 
     local headers_conf="$NGINX_CONFD/security-headers.conf"
-    local pre_existed="false" bak="" header name declared block content=""
+    local pre_existed="false" bak="" header name src declared block content=""
     [[ -f "$headers_conf" ]] && pre_existed="true"
 
     nginx_dump_reset
@@ -1488,8 +1499,17 @@ _webapp_fix_nginx_security_headers() {
         name="${header,,}"
         grep -qxF "$name" <<<"$declared" && continue
         name="${name//-/_}"
-        printf -v block 'map $upstream_http_%s $vpssec_%s {\n    ""      "%s";\n    default "";\n}\nadd_header %s $vpssec_%s always;\n' \
-            "$name" "$name" "${NGINX_SECURITY_HEADERS[$header]}" "$header" "$name"
+        src="\$upstream_http_$name"
+        block=""
+        # X-Frame-Options is also left out where the upstream's CSP has frame-ancestors:
+        # browsers ignore it there, and one predating CSP would refuse the framing.
+        if [[ "$header" == X-Frame-Options ]]; then
+            printf -v block 'map $upstream_http_content_security_policy $vpssec_csp_frame_ancestors {\n    %s "1";\n    default "";\n}\n' \
+                '"~*(^|;)\s*frame-ancestors(\s|;|$)"'
+            src="\"$src\$vpssec_csp_frame_ancestors\""
+        fi
+        printf -v block '%smap %s $vpssec_%s {\n    ""      "%s";\n    default "";\n}\nadd_header %s $vpssec_%s always;\n' \
+            "$block" "$src" "$name" "${NGINX_SECURITY_HEADERS[$header]}" "$header" "$name"
         content+=$'\n'"$block"
     done < <(printf '%s\n' "${!NGINX_SECURITY_HEADERS[@]}" | LC_ALL=C sort)
     # Every header is already set in http{}: a site still without one has its own

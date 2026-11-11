@@ -28,6 +28,11 @@ KERNEL_COREDUMP_CONF="/etc/systemd/coredump.conf"
 KERNEL_COREDUMP_D="/etc/systemd/coredump.conf.d"
 KERNEL_COREDUMP_DROPIN="${KERNEL_COREDUMP_D}/99-vpssec.conf"
 
+# Where modprobe reads blacklists, and the /proc the unused-protocol check asks
+# which modules are loaded and who holds an sctp socket.
+declare -ga KERNEL_MODPROBE_DIRS=(/etc/modprobe.d /usr/lib/modprobe.d /run/modprobe.d /lib/modprobe.d)
+KERNEL_PROC_DIR="/proc"
+
 # The perf_event_paranoid level that blocks all unprivileged perf_event_open()
 # is a distro kernel patch: Ubuntu's needs >= 4, Debian's > 2. Mainline (RHEL,
 # Arch) has no such level, so 2 is its strictest and higher values equal 2.
@@ -509,10 +514,9 @@ kernel_audit() {
 _kernel_audit_unused_protocols() {
     local protocols=("dccp" "sctp" "rds" "tipc")
     local unblocked=()
-    local search_paths=(/etc/modprobe.d /usr/lib/modprobe.d /run/modprobe.d /lib/modprobe.d)
     local existing=()
     local p
-    for p in "${search_paths[@]}"; do
+    for p in "${KERNEL_MODPROBE_DIRS[@]}"; do
         [[ -d "$p" ]] && existing+=("$p")
     done
 
@@ -529,7 +533,22 @@ _kernel_audit_unused_protocols() {
     done
 
     if (( ${#unblocked[@]} > 0 )); then
-        local list="${unblocked[*]}"
+        local list="" users
+        for proto in "${unblocked[@]}"; do
+            # A loaded module stays until reboot (each network namespace holds it),
+            # and blacklisting one in use stops the service that uses it.
+            if ! awk -v m="$proto" '$1 == m { f = 1; exit } END { exit !f }' "$KERNEL_PROC_DIR/modules" 2>/dev/null; then
+                list+="$proto; "
+                continue
+            fi
+            users=$(_kernel_protocol_users "$proto")
+            if [[ -n "$users" ]]; then
+                list+="$(i18n 'kernel.unused_protocol_in_use' "proto=$proto" "procs=$users"); "
+            else
+                list+="$(i18n 'kernel.unused_protocol_loaded' "proto=$proto"); "
+            fi
+        done
+        list="${list%; }"
         check_emit "kernel.unused_protocols_unblocked" low failed \
             title="$(i18n 'kernel.unused_protocols_unblocked' "count=${#unblocked[@]}")" \
             desc="$(i18n 'kernel.unused_protocols_unblocked_desc' "list=$list")" \
@@ -540,6 +559,29 @@ _kernel_audit_unused_protocols() {
             desc="$(i18n 'kernel.unused_protocols_blocked_desc' "protocols=${protocols[*]}")"
         print_ok "$(i18n 'kernel.unused_protocols_blocked')"
     fi
+}
+
+# Names of the processes holding a socket of protocol $1, comma-joined. Only sctp
+# lists its sockets in /proc, for the host's network namespace; reading them there
+# loads no module, where `ss --sctp` would load sctp_diag.
+_kernel_protocol_users() {
+    local eps="$KERNEL_PROC_DIR/net/$1/eps" inodes pid joined
+    local -a names=()
+    [[ -r "$eps" ]] || return 0
+    inodes=$(awk 'NR > 1 && $8 ~ /^[0-9]+$/ { print "socket:[" $8 "]" }' "$eps")
+    [[ -n "$inodes" ]] || return 0
+    mapfile -t names < <(
+        find "$KERNEL_PROC_DIR"/[0-9]*/fd -maxdepth 1 -type l -exec ls -l {} + 2>/dev/null \
+            | WANT="$inodes" awk '
+                BEGIN { n = split(ENVIRON["WANT"], w, "\n"); for (i = 1; i <= n; i++) want[w[i]] = 1 }
+                $(NF - 1) == "->" && ($NF in want) { k = split($(NF - 2), p, "/"); print p[k - 2] }
+            ' | sort -un | while read -r pid; do
+                cat "$KERNEL_PROC_DIR/$pid/comm" 2>/dev/null
+            done | sort -u
+    )
+    (( ${#names[@]} > 0 )) || return 0
+    printf -v joined '%s, ' "${names[@]}"
+    echo "${joined%, }"
 }
 
 # --- IPv6 Audit Function ---

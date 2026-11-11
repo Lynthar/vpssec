@@ -928,20 +928,49 @@ _fs_audit_world_writable() {
 _fs_audit_no_owner() {
     local no_owner_files walked=1
     no_owner_files=$(_fs_find_no_owner) || { walked=0; _FS_CUT_WALKS+=(no-owner); }
-    local count=$(count_lines "$no_owner_files")
+    local count=$(count_lines "$no_owner_files") capped
+    capped=$(( count >= FS_MAX_REPORT_ITEMS ))
 
-    if ((count > 0)); then
-        local file_list=$(echo "$no_owner_files" | head -5 | tr '\n' ' ')
-        local shown
-        shown=$(_fs_count_shown "$count" $(( count >= FS_MAX_REPORT_ITEMS )))
+    # A file in a running container's writable mount belongs to a user of that
+    # container, which the host has no entry for: listed apart, unscored.
+    local file mounts ctr src key joined shown
+    local -a host=() keys=()
+    local -A in_ctr=()
+    (( count > 0 )) && mounts=$(container_rw_mounts)
+    while IFS= read -r file; do
+        [[ -n "$file" ]] || continue
+        key=""
+        while IFS=$'\t' read -r ctr src; do
+            [[ -n "$src" && ( "$file" == "$src" || "$file" == "$src"/* ) ]] && { key="$ctr: $src"; break; }
+        done <<<"${mounts:-}"
+        if [[ -z "$key" ]]; then
+            host+=("$file")
+        else
+            [[ -n "${in_ctr[$key]:-}" ]] || keys+=("$key")
+            in_ctr[$key]=$(( ${in_ctr[$key]:-0} + 1 ))
+        fi
+    done <<<"$no_owner_files"
+
+    if (( ${#host[@]} > 0 )); then
+        local file_list="${host[*]:0:5} "
+        shown=$(_fs_count_shown "${#host[@]}" "$capped")
         check_emit "filesystem.no_owner" low failed \
             title="$(i18n 'filesystem.no_owner' "count=$shown")" \
             desc="$(i18n 'filesystem.no_owner_desc' "list=$file_list")" \
             suggestion="$(i18n 'filesystem.fix_no_owner')"
         print_severity "low" "$(i18n 'filesystem.no_owner' "count=$shown")"
-    elif (( walked )); then
+    elif (( walked && ${#keys[@]} == 0 )); then
         check_emit "filesystem.owner_ok" low passed
         print_ok "$(i18n 'filesystem.owner_ok')"
+    fi
+    if (( ${#keys[@]} > 0 )); then
+        joined=""
+        for key in "${keys[@]}"; do joined+="$key (${in_ctr[$key]}); "; done
+        shown=$(_fs_count_shown "$(( count - ${#host[@]} ))" "$capped")
+        check_emit "filesystem.no_owner_container_data" low failed \
+            title="$(i18n 'filesystem.no_owner_container_data' "count=$shown")" \
+            desc="$(i18n 'filesystem.no_owner_container_data_desc' "list=${joined%; }")"
+        print_info "$(i18n 'filesystem.no_owner_container_data' "count=$shown")"
     fi
 }
 

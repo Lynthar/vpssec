@@ -141,7 +141,7 @@ SH
 # expression $3. Read by _docker_with_containers.
 _ctr() {
     mkdir -p "$BATS_TEST_TMPDIR/ctr"
-    jq -n --arg n "/$2" "[{Name: \$n, Config: {User: \"\"},
+    jq -n --arg n "/$2" "[{Name: \$n, Config: {User: \"\"}, State: {Pid: 0},
         HostConfig: {Privileged: false, CapAdd: null, SecurityOpt: null,
                      NetworkMode: \"bridge\", Memory: 268435456}} | $3]" \
         > "$BATS_TEST_TMPDIR/ctr/$1.json"
@@ -161,6 +161,7 @@ case "\$1 \${2:-}" in
         case "\$4" in
             "{{.Name}}") jq -r '.[0].Name' "\$f" ;;
             "{{.Config.User}}") jq -r '.[0].Config.User' "\$f" ;;
+            "{{.State.Pid}} {{.Config.User}}") jq -r '"\(.[0].State.Pid) \(.[0].Config.User)"' "\$f" ;;
             "{{.HostConfig.NetworkMode}}") jq -r '.[0].HostConfig.NetworkMode' "\$f" ;;
             "{{.HostConfig.Memory}}") jq -r '.[0].HostConfig.Memory' "\$f" ;;
             "{{range .Config.Env}}{{println .}}{{end}}") jq -r '.[0].Config.Env // [] | .[]' "\$f" ;;
@@ -199,6 +200,36 @@ SH
     docker_audit >/dev/null
     _emitted | grep -qx 'docker.some_root_containers failed'
     [ "$(_field docker.some_root_containers title)" = "$(i18n docker.some_root_containers count=2 total=3)" ]
+}
+
+# Recorded on Debian 13's docker.io 26.1.5: /proc/<pid>/status and uid_map of each
+# container's main process, laid out as /proc is.
+_recorded_proc() {
+    DOCKER_PROC_DIR="$(_vpssec_repo_root)/tests/fixtures/docker-proc-debian13"
+}
+
+@test "root containers: one whose entrypoint dropped root is judged by its process" {
+    # redis:7-alpine sets no USER: its entrypoint starts as root and su-execs to
+    # redis (999). alpine runs sleep as root; --user 1000:1000 runs it as 1000.
+    _recorded_proc
+    _ctr c1 xredis '.State.Pid = 325509'
+    _ctr c2 xroot '.State.Pid = 325596'
+    _ctr c3 xuser '.State.Pid = 325675 | .Config.User = "1000:1000"'
+    _docker_with_containers
+
+    docker_audit >/dev/null
+    [ "$(_field docker.some_root_containers title)" = "$(i18n docker.some_root_containers count=1 total=3)" ]
+}
+
+@test "root containers: under userns-remap the uid inside the container decides" {
+    # The host sees 165536 for the container's root and 166535 for redis's 999.
+    _recorded_proc
+    _ctr c1 xredis2 '.State.Pid = 326546'
+    _ctr c2 xroot2 '.State.Pid = 326359'
+    _docker_with_containers
+
+    docker_audit >/dev/null
+    [ "$(_field docker.some_root_containers title)" = "$(i18n docker.some_root_containers count=1 total=2)" ]
 }
 
 @test "capabilities: the finding names each container and what it was granted" {

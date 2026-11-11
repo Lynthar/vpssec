@@ -45,8 +45,18 @@ run_case "seccomp/colon-spelling-missed" 1 \
 
 # --user 0:0 compared whole is not "0", so the container reads as non-root.
 run_case "root/user-group-compared-whole" 1 \
-    '        user="${user%%:*}"' \
-    '        :'
+    '            user="${user%%:*}"' \
+    '            :'
+
+# Config.User alone: an entrypoint that su-execs to redis reads as root again.
+run_case "root/process-not-asked" 1 \
+    '        uid=$(_docker_pid_uid "$pid")' \
+    '        uid=""'
+
+# The host's uid taken as the container's: under userns-remap root reads as 165536.
+run_case "root/uid-map-ignored" 1 \
+    '    awk -v u="$uid" '"'"'$2 <= u + 0 && u + 0 < $2 + $3 { print u - $2 + $1; exit }'"'"' \' \
+    '    awk -v u="$uid" '"'"'{ print u; exit }'"'"' \'
 
 # Every container counted, granted capabilities or not.
 run_case "caps/empty-capadd-counted" 1 \

@@ -137,8 +137,31 @@ run_case "headers/cr-kept" 1 \
     '            { x = 1 }'
 
 run_case "headers/name-case-sensitive" 1 \
-    '            [[ ",$out," == *",${header,,},"* ]] || missing+=("$header")' \
-    '            [[ ",$out," == *",${header},"* ]] || missing+=("$header")'
+    '            [[ ",$out," == *",${header,,},"* ]] && continue' \
+    '            [[ ",$out," == *",${header},"* ]] && continue'
+
+# CSP frame-ancestors: not standing for X-Frame-Options; standing for every header;
+# looked for in a report-only policy too; its name compared as written.
+run_case "headers/frame-ancestors-ignored" 1 \
+    '            [[ "$header" == X-Frame-Options && ",$out," == *",csp:frame-ancestors,"* ]] && continue' \
+    '            :'
+
+run_case "headers/frame-ancestors-stands-for-all" 1 \
+    '            [[ "$header" == X-Frame-Options && ",$out," == *",csp:frame-ancestors,"* ]] && continue' \
+    '            [[ ",$out," == *",csp:frame-ancestors,"* ]] && continue'
+
+run_case "headers/frame-ancestors-report-only" 1 \
+    '                if (n == "content-security-policy" && ancestors(substr($0, i + 1))) n = n ",csp:frame-ancestors"' \
+    '                if (n ~ /^content-security-policy/ && ancestors(substr($0, i + 1))) n = n ",csp:frame-ancestors"'
+
+run_case "headers/frame-ancestors-case-sensitive" 1 \
+    '                k = split(tolower(v), d, ";")' \
+    '                k = split(v, d, ";")'
+
+# Any directive containing the word: frame-src read as frame-ancestors.
+run_case "headers/frame-ancestors-substring" 1 \
+    '                for (j = 1; j <= k; j++) if (split(d[j], w, " ") && w[1] == "frame-ancestors") return 1' \
+    '                for (j = 1; j <= k; j++) if (d[j] ~ /frame-/) return 1'
 
 run_case "headers/budget-ignored" 1 \
     '        elif (( SECONDS >= deadline )); then' \

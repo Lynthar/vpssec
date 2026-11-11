@@ -165,7 +165,8 @@ _ufw_ports_expected() {
 }
 
 # Inbound rules open to Anywhere, one line each: sensitive ports first, then the
-# others to review. With argument `sensitive`, the sensitive ports only.
+# others to review. With argument `sensitive`, only the lines that set the
+# severity: sensitive ports and rules opening every port.
 _ufw_find_permissive_rules() {
     local issues=()
 
@@ -206,14 +207,13 @@ _ufw_find_permissive_rules() {
             issues+=("$(i18n 'ufw.f_open_anywhere' "port=$port/udp ($service)")")
         fi
     done
-    # `sensitive` stops here: these alone set the finding's severity.
-    [[ "${1:-}" == sensitive ]] && { printf '%s\n' "${issues[@]}"; return 0; }
 
     # Any other inbound ALLOW/LIMIT from anywhere is listed for review by the port
     # it ends in, an app profile by the ports ufw resolved it to. Not SSH (each
     # port sshd listens on) or web; not interface-bound rules or "(v6)" copies.
     local open_ok=" 22 80 443 $(get_ssh_ports | tr '\n' ' ')"
     local line to tok ports
+    local -a review=() every=()
     while IFS= read -r line; do
         # Without its comment: one reading "ALLOW Anywhere" would be matched instead.
         line="${line%%#*}"
@@ -221,12 +221,16 @@ _ufw_find_permissive_rules() {
         to="${BASH_REMATCH[1]}"
         [[ "$to" == *" on "* || "$to" == *" (v6)" ]] && continue
         tok="${to##* }"
-        if [[ "$tok" =~ ^[0-9][0-9,:]*(/(tcp|udp))?$ ]]; then
+        if _ufw_to_every_port "$to"; then
+            review+=("$(i18n 'ufw.f_open_anywhere_review' "port=$to")")
+            every+=("${review[-1]}")
+            continue
+        elif [[ "$tok" =~ ^[0-9][0-9,:]*(/(tcp|udp))?$ ]]; then
             [[ "$open_ok" == *" ${tok%%/*} "* ]] && continue
             [[ " ${sensitive_ports[*]%%:*} " == *" ${tok%%/*} "* ]] && continue
         else
-            # An app profile, or every port (Anywhere, one address): what the rule
-            # store resolves it to decides; anything unresolved is listed by name.
+            # An app profile: what the rule store resolves it to decides; one it
+            # cannot resolve is listed by name.
             ports=$(_ufw_app_ports "$to")
             if [[ -n "$ports" ]]; then
                 _ufw_ports_expected "$open_ok" "$ports" && continue
@@ -235,10 +239,27 @@ _ufw_find_permissive_rules() {
                 tok="$to"
             fi
         fi
-        issues+=("$(i18n 'ufw.f_open_anywhere_review' "port=$tok")")
+        review+=("$(i18n 'ufw.f_open_anywhere_review' "port=$tok")")
     done <<< "$ufw_output"
 
-    printf '%s\n' "${issues[@]}"
+    # `sensitive`: the lines that set the finding's severity. A rule opening every
+    # port is listed for review, yet opens the sensitive ones too.
+    if [[ "${1:-}" == sensitive ]]; then
+        printf '%s\n' "${issues[@]}" "${every[@]}"
+    else
+        printf '%s\n' "${issues[@]}" "${review[@]}"
+    fi
+}
+
+# Does ufw status's To column $1 name no port: every port of anywhere or of one
+# address or network ("Anywhere/udp", "198.51.0.0/16/tcp", "2001:db8::20")? A
+# port list never has two colons without a comma between them.
+_ufw_to_every_port() {
+    local a="${1%/tcp}"
+    a="${a%/udp}"
+    [[ "$a" =~ ^(.*)/[0-9]{1,3}$ ]] && a="${BASH_REMATCH[1]}"
+    [[ "$a" == Anywhere || "$a" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && return 0
+    [[ "$a" == *:*:* && "$a" =~ ^[0-9A-Fa-f:.]+$ ]]
 }
 
 # --- UFW Audit ---
@@ -422,7 +443,8 @@ _ufw_audit_permissive_rules() {
         issue_list="${issue_list%; }"
 
         # Review items alone are low: often the services the host exists for. A
-        # sensitive port open to anywhere is medium, a database or Docker one high.
+        # sensitive port or every port open to anywhere is medium, a database or
+        # Docker port high.
         local sensitive severity=low
         sensitive=$(_ufw_find_permissive_rules sensitive)
         if [[ -n "$sensitive" ]]; then

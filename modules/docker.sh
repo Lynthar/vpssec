@@ -14,6 +14,8 @@ DOCKER_PROBE_TIMEOUT=10
 # Exists once a docker call has timed out since docker_audit began. A file, not
 # a variable: most calls run in $(...) subshells, whose assignments never return.
 DOCKER_STALL_MARK="${VPSSEC_STATE}/.docker-stalled"
+# Where a container's main process is read: its status and uid_map.
+DOCKER_PROC_DIR="/proc"
 
 # --- Docker Helper Functions ---
 
@@ -158,16 +160,35 @@ _docker_get_privileged_containers() {
     printf '%s\n' "${privileged[@]}"
 }
 
+# The effective uid host process $1 runs as inside its user namespace (under
+# userns-remap the host sees 165536 for the container's 0); nothing when /proc
+# does not show it.
+_docker_pid_uid() {
+    local uid
+    [[ "$1" =~ ^[1-9][0-9]*$ ]] || return 0
+    uid=$(awk '$1 == "Uid:" { print $3; exit }' "$DOCKER_PROC_DIR/$1/status" 2>/dev/null)
+    [[ "$uid" =~ ^[0-9]+$ && -r "$DOCKER_PROC_DIR/$1/uid_map" ]] || return 0
+    awk -v u="$uid" '$2 <= u + 0 && u + 0 < $2 + $3 { print u - $2 + $1; exit }' \
+        "$DOCKER_PROC_DIR/$1/uid_map" 2>/dev/null
+}
+
 _docker_get_root_containers() {
-    local root_containers=()
+    local root_containers=() container pid user uid
     for container in $(_docker ps -q 2>/dev/null); do
-        local user=$(_docker inspect "$container" --format '{{.Config.User}}' 2>/dev/null)
-        # user[:group]; only the user part decides who the process runs as.
-        user="${user%%:*}"
-        if [[ -z "$user" || "$user" == "root" || "$user" == "0" ]]; then
-            local name=$(_docker inspect "$container" --format '{{.Name}}' 2>/dev/null | tr -d '/')
-            root_containers+=("$name")
+        local info=$(_docker inspect "$container" --format '{{.State.Pid}} {{.Config.User}}' 2>/dev/null)
+        pid="${info%% *}" user="${info#* }"
+        # Who the main process runs as now: an entrypoint started as root that
+        # dropped to another user (gosu, su-exec) is not root. Config.User when
+        # /proc does not say; only its user part decides.
+        uid=$(_docker_pid_uid "$pid")
+        if [[ -n "$uid" ]]; then
+            (( uid == 0 )) || continue
+        else
+            user="${user%%:*}"
+            [[ -z "$user" || "$user" == "root" || "$user" == "0" ]] || continue
         fi
+        local name=$(_docker inspect "$container" --format '{{.Name}}' 2>/dev/null | tr -d '/')
+        root_containers+=("$name")
     done
     printf '%s\n' "${root_containers[@]}"
 }

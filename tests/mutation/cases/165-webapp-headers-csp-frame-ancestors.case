@@ -1,0 +1,60 @@
+# Plant: a site proxied to a comment widget that sends Remark42 1.18's headers: a CSP with
+# frame-ancestors, Referrer-Policy and X-Content-Type-Options, no X-Frame-Options (an nginx
+# server on a unix socket, unscored), beside the stock default site, which sends none.
+# Expect: webapp.nginx_security_headers → webapp.nginx_security_headers → nginx_security_headers_ok.
+# postfix: the widget still answers with no X-Frame-Options, now with X-XSS-Protection; the
+# default site gets SAMEORIGIN, so the map's two-variable source holds in a real nginx.
+# Rollback deletes the drop-in, so the default site is missing them again.
+TEST_DESC="headers behind proxy_pass: no X-Frame-Options beside the application's CSP frame-ancestors"
+EXPECT_ID="webapp.nginx_security_headers"
+EXPECT_STATUS="failed"
+EXPECT_SEVERITY="low"
+MODULE="webapp"
+FIX_ID="webapp.nginx_security_headers"
+EXPECT_FIXED_ID="webapp.nginx_security_headers_ok"
+EXPECT_FIXED_STATUS="passed"
+EXPECT_ROLLBACK_ID="webapp.nginx_security_headers"
+EXPECT_ROLLBACK_STATUS="failed"
+EXPECT_ROLLBACK_RC=0
+
+_DROPIN="/etc/nginx/conf.d/security-headers.conf"
+_SITE="/etc/nginx/sites-enabled/vpssec-framed"
+
+precheck() {
+    command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null \
+        && [[ ! -e "$_SITE" && -z "$(ss -Hltn 'sport = :8081' 2>/dev/null)" ]]
+}
+
+mutate() {
+    rm -f "$_DROPIN"
+    cat > "$_SITE" <<'EOF'
+server {
+    listen unix:/run/vpssec-widget.sock;
+    add_header Content-Security-Policy "default-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self'; frame-src 'self' mailto:; img-src *; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'none'; object-src 'none'; frame-ancestors self https://blog.example.org;" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    location / { return 404 "404 page not found\n"; }
+}
+server {
+    listen 127.0.0.1:8081;
+    server_name comments.test;
+    location / { proxy_pass http://unix:/run/vpssec-widget.sock; }
+}
+EOF
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
+}
+
+postfix() {
+    local widget stock
+    widget=$(curl -s -o /dev/null -D - -H 'Host: comments.test' http://127.0.0.1:8081/ | tr -d '\r')
+    stock=$(curl -s -o /dev/null -D - http://127.0.0.1/ | tr -d '\r')
+    ! grep -qi '^x-frame-options:' <<<"$widget" \
+        && grep -qx 'X-XSS-Protection: 0' <<<"$widget" \
+        && grep -qx 'X-Frame-Options: SAMEORIGIN' <<<"$stock"
+}
+
+restore() {
+    rm -f "$_DROPIN" "$_SITE"
+    systemctl reload nginx >/dev/null 2>&1
+    return 0
+}

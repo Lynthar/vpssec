@@ -1,0 +1,31 @@
+# Mutation cases: tests/test_kernel_unused_protocols.bats against modules/kernel.sh.
+# mutate-suite: modules/kernel.sh tests/test_kernel_unused_protocols.bats
+#
+# Which rarely-used protocol modules modprobe would still load, and what the finding
+# says of one already loaded or in use.
+
+run_case "blacklist/ignored" 1 \
+    '            if grep -rqsE "^[[:space:]]*(install[[:space:]]+${proto}[[:space:]]+/bin/(true|false)|blacklist[[:space:]]+${proto})([[:space:]]|$)" "${existing[@]}"; then' \
+    '            if false; then'
+
+run_case "loaded/not-asked" 1 \
+    '            if ! awk -v m="$proto" '"'"'$1 == m { f = 1; exit } END { exit !f }'"'"' "$KERNEL_PROC_DIR/modules" 2>/dev/null; then' \
+    '            if true; then'
+
+run_case "users/not-asked" 1 \
+    '            users=$(_kernel_protocol_users "$proto")' \
+    '            users=""'
+
+# The UID column read as the inode: no socket ever matches.
+run_case "users/wrong-column" 1 \
+    '    inodes=$(awk '"'"'NR > 1 && $8 ~ /^[0-9]+$/ { print "socket:[" $8 "]" }'"'"' "$eps")' \
+    '    inodes=$(awk '"'"'NR > 1 && $7 ~ /^[0-9]+$/ { print "socket:[" $7 "]" }'"'"' "$eps")'
+
+# Every process with any link named, a TCP socket and /dev/null included.
+run_case "users/any-link-counted" 1 \
+    '                $(NF - 1) == "->" && ($NF in want) { k = split($(NF - 2), p, "/"); print p[k - 2] }' \
+    '                $(NF - 1) == "->" { k = split($(NF - 2), p, "/"); print p[k - 2] }'
+
+run_case "users/pid-misread" 1 \
+    '                $(NF - 1) == "->" && ($NF in want) { k = split($(NF - 2), p, "/"); print p[k - 2] }' \
+    '                $(NF - 1) == "->" && ($NF in want) { k = split($(NF - 2), p, "/"); print p[k - 1] }'

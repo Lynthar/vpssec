@@ -83,3 +83,17 @@ run_case "sheltered/still-medium" 1 \
 run_case "sheltered/dropped-beside-open" 1 \
     '                desc+="; $(i18n '"'"'filesystem.world_writable_root_only_more'"'"' "items=$(printf '"'"'%s '"'"' "${shut[@]:0:5}")")"' \
     '                :'
+
+# No-owner files in a running container's writable mount: never asked about,
+# claimed by any name that starts like the source, or an all-clear beside them.
+run_case "no-owner/mounts-not-asked" 1 \
+    '    (( count > 0 )) && mounts=$(container_rw_mounts)' \
+    '    :'
+
+run_case "no-owner/source-prefix-claims" 1 \
+    '            [[ -n "$src" && ( "$file" == "$src" || "$file" == "$src"/* ) ]] && { key="$ctr: $src"; break; }' \
+    '            [[ -n "$src" && "$file" == "$src"* ]] && { key="$ctr: $src"; break; }'
+
+run_case "no-owner/all-clear-beside-container-data" 1 \
+    '    elif (( walked && ${#keys[@]} == 0 )); then' \
+    '    elif (( walked )); then'

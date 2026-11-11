@@ -220,13 +220,25 @@ _active_server_tokens() {
     run _webapp_fix_nginx_security_headers
     [ "$status" -eq 0 ]
     local f="$NGINX_CONFD/security-headers.conf"
-    grep -qxF 'map $upstream_http_x_frame_options $vpssec_x_frame_options {' "$f"
+    grep -qxF 'map $upstream_http_x_content_type_options $vpssec_x_content_type_options {' "$f"
     [ "$(_map_value x_frame_options)" = '    ""      "SAMEORIGIN";' ]
     grep -qxF '    default "";' "$f"
     grep -qxF 'add_header X-Frame-Options $vpssec_x_frame_options always;' "$f"
     grep -qxF 'add_header X-Content-Type-Options $vpssec_x_content_type_options always;' "$f"
     grep -qxF 'add_header Referrer-Policy $vpssec_referrer_policy always;' "$f"
     grep -qxF 'add_header X-XSS-Protection $vpssec_x_xss_protection always;' "$f"
+}
+
+@test "headers: X-Frame-Options is not sent where the upstream's CSP has frame-ancestors" {
+    # Browsers ignore X-Frame-Options under it (CSP3 6.4.2.2), and a widget
+    # served to be framed elsewhere would be refused by one that predates CSP.
+    _headers_nginx_conf
+    run _webapp_fix_nginx_security_headers
+    [ "$status" -eq 0 ]
+    local f="$NGINX_CONFD/security-headers.conf"
+    grep -qxF 'map $upstream_http_content_security_policy $vpssec_csp_frame_ancestors {' "$f"
+    [ "$(_map_value csp_frame_ancestors)" = '    "~*(^|;)\s*frame-ancestors(\s|;|$)" "1";' ]
+    grep -qxF 'map "$upstream_http_x_frame_options$vpssec_csp_frame_ancestors" $vpssec_x_frame_options {' "$f"
 }
 
 @test "headers: the legacy XSS auditor is disabled, not enabled" {

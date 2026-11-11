@@ -1,0 +1,9 @@
+# Mutation cases: tests/test_filesystem_findings.bats against core/common.sh.
+# mutate-suite: core/common.sh tests/test_filesystem_findings.bats
+#
+# container_rw_mounts, as the no-owner check reads it. The suite's docker stub
+# ignores the template, so `{{if .RW}}` is held only by the real dockerd.
+
+run_case "mounts/name-keeps-slash" 1 \
+    '            { n = $1; sub(/^\//, "", n); for (i = 2; i <= NF; i++) if ($i != "") print n "\t" $i }' \
+    '            { n = $1; for (i = 2; i <= NF; i++) if ($i != "") print n "\t" $i }'

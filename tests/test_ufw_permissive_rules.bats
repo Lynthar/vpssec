@@ -123,6 +123,40 @@ Anywhere open to Anywhere (review if needed)
     _vpssec_refute grep -qE 'OpenSSH|Nginx' <<<"$output"
 }
 
+# Real ufw 0.36.2: every form a rule opening every port takes in the To column
+# (an IPv6 address has no "(v6)"), next to SSH, 8443, a source-bound rule and an
+# interface rule.
+_every_port_host() {
+    VPSSEC_TEST_UFW_STATUS="$(_vpssec_repo_root)/tests/fixtures/ufw-status-every-port-debian12.txt"
+}
+
+@test "permissive rules: a rule opening every port is listed for review by its To column" {
+    _every_port_host
+    run _ufw_find_permissive_rules
+    [ "$output" = "8443/tcp open to Anywhere (review if needed)
+Anywhere open to Anywhere (review if needed)
+Anywhere/udp open to Anywhere (review if needed)
+203.0.113.20 open to Anywhere (review if needed)
+203.0.113.21/udp open to Anywhere (review if needed)
+198.51.100.0/24 open to Anywhere (review if needed)
+198.51.0.0/16/tcp open to Anywhere (review if needed)
+2001:db8::20 open to Anywhere (review if needed)
+2001:db8:1::/48/tcp open to Anywhere (review if needed)" ]
+}
+
+@test "permissive rules: each form of a rule opening every port counts toward severity" {
+    _every_port_host
+    run _ufw_find_permissive_rules sensitive
+    [ "$output" = "Anywhere open to Anywhere (review if needed)
+Anywhere/udp open to Anywhere (review if needed)
+203.0.113.20 open to Anywhere (review if needed)
+203.0.113.21/udp open to Anywhere (review if needed)
+198.51.100.0/24 open to Anywhere (review if needed)
+198.51.0.0/16/tcp open to Anywhere (review if needed)
+2001:db8::20 open to Anywhere (review if needed)
+2001:db8:1::/48/tcp open to Anywhere (review if needed)" ]
+}
+
 @test "permissive rules: an app profile ufw's rule store cannot resolve is listed by name" {
     # No tuples to read: what it opens is unknown, so it is shown, not assumed.
     _apps_host
@@ -149,7 +183,18 @@ _severity() {
 }
 
 @test "permissive rules: only rules to review is low" {
-    # The services a host exists for (XMPP, TURN) land here.
+    # The services a host exists for (XMPP, TURN) land here. Lines of the real
+    # table above, without its rule for every port.
     _apps_host
+    _ufw_table \
+        'Samba                      ALLOW       Anywhere                  ' \
+        '203.0.113.10 8443/tcp      ALLOW       Anywhere                  ' \
+        '60000:61000/udp            ALLOW       Anywhere                  '
     [ "$(_severity)" = "low" ]
+}
+
+@test "permissive rules: a rule opening every port to anywhere is medium" {
+    # It opens the sensitive ports along with the rest.
+    _every_port_host
+    [ "$(_severity)" = "medium" ]
 }

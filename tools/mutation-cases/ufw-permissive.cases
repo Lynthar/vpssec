@@ -85,16 +85,43 @@ run_case "permissive/app-ports-unchecked" 1 \
     '            [[ "$ok" == *" $p "* ]] || return 1' \
     '            :'
 
-# Anything the rule store cannot resolve silently dropped: an app it has no
-# tuple for, an allow-all, a rule for every port of one address.
+# An app the rule store has no tuple for silently dropped.
 run_case "permissive/unresolved-app-dropped" 1 \
     '                tok="$to"' \
     '                continue'
 
-# Severity: sensitive ports alone decide it; review items alone are low.
-run_case "severity/review-items-counted" 1 \
-    '    [[ "${1:-}" == sensitive ]] && { printf '"'"'%s\n'"'"' "${issues[@]}"; return 0; }' \
+# A rule for every port dropped instead of listed for review.
+run_case "every-port/not-listed" 1 \
+    '            review+=("$(i18n '"'"'ufw.f_open_anywhere_review'"'"' "port=$to")")' \
+    '            :'
+
+# Each step of reading a To column that names no port: the protocol suffix, the
+# prefix length, an IPv6 address.
+run_case "every-port/udp-suffix-kept" 1 \
+    '    a="${a%/udp}"' \
     '    :'
+
+run_case "every-port/tcp-suffix-kept" 1 \
+    '    local a="${1%/tcp}"' \
+    '    local a="$1"'
+
+run_case "every-port/prefix-length-kept" 1 \
+    '    [[ "$a" =~ ^(.*)/[0-9]{1,3}$ ]] && a="${BASH_REMATCH[1]}"' \
+    '    :'
+
+run_case "every-port/ipv6-address-missed" 1 \
+    '    [[ "$a" == *:*:* && "$a" =~ ^[0-9A-Fa-f:.]+$ ]]' \
+    '    false'
+
+# Severity: sensitive ports and rules for every port decide it; review items
+# alone are low.
+run_case "severity/review-items-counted" 1 \
+    '        printf '"'"'%s\n'"'"' "${issues[@]}" "${every[@]}"' \
+    '        printf '"'"'%s\n'"'"' "${issues[@]}" "${review[@]}"'
+
+run_case "severity/every-port-not-counted" 1 \
+    '            every+=("${review[-1]}")' \
+    '            :'
 
 run_case "severity/review-only-medium" 1 \
     '        local sensitive severity=low' \

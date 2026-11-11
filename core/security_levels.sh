@@ -616,6 +616,7 @@ declare -gA CHECK_SCORE_CATEGORY=(
     ["filesystem.no_world_writable"]="recommended"
     ["filesystem.no_owner"]="recommended"
     ["filesystem.owner_ok"]="recommended"
+    ["filesystem.no_owner_container_data"]="info"   # a container user's files, unknown to the host
     ["filesystem.sensitive_perms_wrong"]="required"
     ["filesystem.sensitive_perms_wrong_minor"]="required"
     ["filesystem.sensitive_perms_ok"]="required"

@@ -2,8 +2,8 @@
 # mutate-suite: modules/filesystem.sh tests/test_fs_walk_cut.bats
 #
 # A cut walk must withhold its passed check, be named, and mark the module
-# incomplete. Occurrences 1-5 of the elif are suid, sgid, world-writable,
-# no-owner and caps, in file order.
+# incomplete. Occurrences 1-4 of the plain elif are suid, sgid, world-writable
+# and caps, in file order; no-owner's also asks that no container claimed a file.
 
 run_case "suid/passed-despite-cut" 1 \
     '    elif (( walked )); then' \
@@ -17,11 +17,11 @@ run_case "world-writable/passed-despite-cut" 3 \
     '    elif (( walked )); then' \
     '    else'
 
-run_case "no-owner/passed-despite-cut" 4 \
-    '    elif (( walked )); then' \
-    '    else'
+run_case "no-owner/passed-despite-cut" 1 \
+    '    elif (( walked && ${#keys[@]} == 0 )); then' \
+    '    elif (( ${#keys[@]} == 0 )); then'
 
-run_case "caps/passed-despite-cut" 5 \
+run_case "caps/passed-despite-cut" 4 \
     '    elif (( walked )); then' \
     '    else'
 

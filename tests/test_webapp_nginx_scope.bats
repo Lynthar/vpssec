@@ -160,6 +160,28 @@ b.example" ]
     [ "$(_field webapp.nginx_security_headers fix_id)" = webapp.nginx_security_headers ]
 }
 
+@test "headers: an enforced CSP frame-ancestors stands for X-Frame-Options" {
+    # Real Remark42 v1.18.0 (ALLOWED_HOSTS=self,https://blog.example.org) at /: a
+    # comment widget framed by the blog, which browsers let its CSP decide.
+    _dump_http 'server { listen 80; server_name comments.example; location / { proxy_pass http://127.0.0.1:8080; } }'
+    { echo 0; cat "$(_vpssec_repo_root)/tests/fixtures/remark42-root-headers.txt"; } \
+        > "$CURL_ANSWERS/http___comments_example_"
+    _audit_nginx
+    [ "$(_desc webapp.nginx_security_headers)" = "http://comments.example/: X-XSS-Protection" ]
+}
+
+@test "headers: a report-only CSP, or one without frame-ancestors, leaves X-Frame-Options missing" {
+    local others=('X-Content-Type-Options: nosniff' 'X-XSS-Protection: 0' 'Referrer-Policy: no-referrer')
+    _dump_http 'server { listen 80; server_name a.example; }
+server { listen 80; server_name b.example; }
+server { listen 80; server_name c.example; }'
+    _answer 'http://a.example/' 0 'HTTP/1.1 200 OK' "${others[@]}" "Content-Security-Policy-Report-Only: frame-ancestors 'none'"
+    _answer 'http://b.example/' 0 'HTTP/1.1 200 OK' "${others[@]}" "Content-Security-Policy: default-src 'self'; frame-src 'none'"
+    _answer 'http://c.example/' 0 'HTTP/2 200' "${others[@]}" "content-security-policy: default-src 'self';FRAME-ANCESTORS 'self'"
+    _audit_nginx
+    [ "$(_desc webapp.nginx_security_headers)" = "http://a.example/: X-Frame-Options; http://b.example/: X-Frame-Options" ]
+}
+
 @test "headers: a server with add_header of its own is named apart, with no fix that cannot reach it" {
     # nginx hands http{}'s add_header only to a server that sets none: the drop-in
     # would be written and every verify would fail. Certbot's --hsts writes one there.

@@ -1936,6 +1936,23 @@ declare -ga _FS_PRUNE_PATHS=(
     /snap
 )
 
+# Running containers' writable mounts, one "<container>\t<source>" line each, as
+# the docker CLI reports them; nothing when there is none to ask or no answer in
+# 10 s.
+container_rw_mounts() {
+    check_command docker || return 0
+    local ids
+    local -a bound=()
+    check_command timeout && bound=(timeout 10)
+    ids=$("${bound[@]}" docker ps -q 2>/dev/null) || return 0
+    [[ -n "$ids" ]] || return 0
+    # shellcheck disable=SC2086 # one container id per word
+    "${bound[@]}" docker inspect --format '{{.Name}}{{range .Mounts}}{{if .RW}}{{"\t"}}{{.Source}}{{end}}{{end}}' \
+        $ids 2>/dev/null | awk -F'\t' '
+            { n = $1; sub(/^\//, "", n); for (i = 2; i <= NF; i++) if ($i != "") print n "\t" $i }
+        '
+}
+
 # Hard timeout per filesystem walk; override with VPSSEC_FS_TIMEOUT=<seconds>.
 _FS_FIND_TIMEOUT="${VPSSEC_FS_TIMEOUT:-60}"
 

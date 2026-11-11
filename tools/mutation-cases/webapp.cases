@@ -53,6 +53,12 @@ run_case "headers/upstream-copy-ignored" 1 \
     "        content+=\$'\\n'\"\$block\"" \
     "        content+=\$'\\n'\"add_header \$header \${NGINX_SECURITY_HEADERS[\$header]} always;\""
 
+# X-Frame-Options keyed on the upstream's own copy alone: sent beside a CSP
+# frame-ancestors that already decides the framing.
+run_case "headers/frame-ancestors-not-consulted" 1 \
+    '            src="\"$src\$vpssec_csp_frame_ancestors\""' \
+    '            :'
+
 run_case "headers/operator-header-written-again" 1 \
     '        grep -qxF "$name" <<<"$declared" && continue' \
     '        :'

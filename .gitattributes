@@ -3,6 +3,10 @@
 # tag-vs-VERSION string comparison.
 * text=auto eol=lf
 
+# Recorded HTTP response headers, CRLF as they came off the wire: the probe that
+# reads them must strip the CR itself.
+tests/fixtures/*-headers.txt -text
+
 # No binary files today; these pre-empt a text=auto misdetection, which
 # would let eol=lf mangle an image.
 *.png          binary
