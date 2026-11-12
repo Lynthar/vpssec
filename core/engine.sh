@@ -375,6 +375,13 @@ audit_module() {
 _record_unavailable_modules() {
     for module in "${!VPSSEC_MODULE_UNAVAILABLE[@]}"; do
         if [[ "${VPSSEC_MODULE_UNAVAILABLE[$module]}" == "1" ]]; then
+            # Gated off but running: off PATH, here though not audited.
+            if [[ "$module" == nginx ]] && nginx_running; then
+                check_emit "nginx.not_on_path" info failed \
+                    desc="$(i18n 'nginx.not_on_path_desc')" \
+                    suggestion="$(i18n 'nginx.not_on_path_fix')"
+                continue
+            fi
             local mod_title=$(i18n "${module}.title")
             check_emit "${module}.not_installed" low passed \
                 title="$(i18n "${module}.not_installed")" \

@@ -1,0 +1,55 @@
+# Plant: a site whose `location /` sets add_header of its own (Cache-Control, as a proxied
+# app often has), beside the stock default site, which sends no security headers.
+# Expect: webapp.nginx_security_headers → webapp.nginx_security_headers → still failed, naming
+# only that site, apart; guide exits 0, its verify asking only the sites the drop-in reaches.
+# postfix: in a real nginx the site still answers with its Cache-Control and no X-Frame-Options,
+# the default site with SAMEORIGIN. Rollback deletes the drop-in.
+TEST_DESC="headers: a location / with add_header of its own is named apart, not fixed"
+EXPECT_ID="webapp.nginx_security_headers"
+EXPECT_STATUS="failed"
+EXPECT_SEVERITY="low"
+MODULE="webapp"
+FIX_ID="webapp.nginx_security_headers"
+EXPECT_FIXED_ID="webapp.nginx_security_headers"
+EXPECT_FIXED_STATUS="failed"
+EXPECT_ROLLBACK_ID="webapp.nginx_security_headers"
+EXPECT_ROLLBACK_STATUS="failed"
+EXPECT_ROLLBACK_RC=0
+
+_DROPIN="/etc/nginx/conf.d/security-headers.conf"
+_SITE="/etc/nginx/sites-enabled/vpssec-own-location"
+
+precheck() {
+    command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null \
+        && [[ ! -e "$_SITE" && -z "$(ss -Hltn 'sport = :8082' 2>/dev/null)" ]]
+}
+
+mutate() {
+    rm -f "$_DROPIN"
+    cat > "$_SITE" <<'EOF'
+server {
+    listen 127.0.0.1:8082;
+    server_name app.test;
+    location / {
+        add_header Cache-Control "no-store" always;
+        return 200 "ok\n";
+    }
+}
+EOF
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
+}
+
+postfix() {
+    local app stock
+    app=$(curl -s -o /dev/null -D - -H 'Host: app.test' http://127.0.0.1:8082/ | tr -d '\r')
+    stock=$(curl -s -o /dev/null -D - http://127.0.0.1/ | tr -d '\r')
+    grep -qx 'Cache-Control: no-store' <<<"$app" \
+        && ! grep -qi '^x-frame-options:' <<<"$app" \
+        && grep -qx 'X-Frame-Options: SAMEORIGIN' <<<"$stock"
+}
+
+restore() {
+    rm -f "$_DROPIN" "$_SITE"
+    systemctl reload nginx >/dev/null 2>&1
+    return 0
+}

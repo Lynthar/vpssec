@@ -1,0 +1,15 @@
+Status: active
+
+To                         Action      From
+--                         ------      ----
+OpenSSH                    ALLOW       Anywhere                   # ssh
+Nginx Full                 ALLOW       Anywhere                   # web
+2222/tcp                   LIMIT       Anywhere                   # alt ssh
+8443/tcp                   ALLOW       Anywhere                   # admin panel
+3306/tcp                   DENY        Anywhere                  
+OpenSSH (v6)               ALLOW       Anywhere (v6)              # ssh
+Nginx Full (v6)            ALLOW       Anywhere (v6)              # web
+2222/tcp (v6)              LIMIT       Anywhere (v6)              # alt ssh
+8443/tcp (v6)              ALLOW       Anywhere (v6)              # admin panel
+3306/tcp (v6)              DENY        Anywhere (v6)             
+

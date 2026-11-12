@@ -193,6 +193,66 @@ server { listen 80; server_name c.example; }'
     [ "$(_field webapp.nginx_security_headers suggestion)" = "$(i18n 'webapp.add_security_headers_in_server')" ]
 }
 
+@test "headers: a location / with add_header of its own keeps the fix away from its site" {
+    # nginx hands http{}'s add_header only to a location setting none: proxied apps
+    # often add Cache-Control or CORS there.
+    _dump_http 'server { listen 80; server_name app.example; location / { add_header Cache-Control no-store; proxy_pass http://127.0.0.1:3000; } }'
+    _answer 'http://app.example/' 0 'HTTP/1.1 200 OK' 'cache-control: no-store'
+    _audit_nginx
+    [ "$(_desc webapp.nginx_security_headers)" = "http://app.example/: Referrer-Policy, X-Content-Type-Options, X-Frame-Options, X-XSS-Protection ($(i18n 'webapp.headers_own_add_header'))" ]
+    [ -z "$(_field webapp.nginx_security_headers fix_id)" ]
+}
+
+# Does http{}'s add_header reach / of the one server in http{} body $1? "-" when
+# it does, "own" when a level on the way may keep it out.
+_reach() {
+    _dump_http "$1"
+    nginx_dump_reset
+    nginx_dump_load
+    _webapp_nginx_header_targets | cut -f4
+}
+
+@test "reach: only the location nginx picks for / counts" {
+    # An asset regex cannot match /; = / is taken before the prefix; ^~ skips the
+    # regexes; a regex matching / is taken over the prefix; /api/ is not /.
+    [ "$(_reach 'server { listen 80; location / { } location ~* \.(css|js)$ { add_header Cache-Control max-age=60; } }')" = - ]
+    [ "$(_reach 'server { listen 80; location = / { } location / { add_header Cache-Control no-store; } }')" = - ]
+    [ "$(_reach 'server { listen 80; location ^~ / { } location ~ ^/ { add_header Cache-Control no-store; } }')" = - ]
+    [ "$(_reach 'server { listen 80; location / { } location ~ ^/$ { add_header Cache-Control no-store; } }')" = own ]
+    [ "$(_reach 'server { listen 80; location /api/ { add_header Access-Control-Allow-Origin *; } }')" = - ]
+}
+
+@test "reach: a modifier written onto its argument, and the first matching regex" {
+    # =/ and ~*^/$ are nginx's one-argument forms; regexes are tried in order.
+    [ "$(_reach 'server { listen 80; location =/ { } location / { add_header Cache-Control no-store; } }')" = - ]
+    [ "$(_reach 'server { listen 80; location / { } location ~*^/$ { add_header Cache-Control no-store; } }')" = own ]
+    [ "$(_reach 'server { listen 80; location ~ ^/ { } location ~ ^/$ { add_header X-A 1; } }')" = - ]
+}
+
+@test "reach: the locations inside the one picked are followed, and inherit its add_header" {
+    [ "$(_reach 'server { listen 80; location / { add_header X-A 1; location ~ \.php$ { } } }')" = own ]
+    [ "$(_reach 'server { listen 80; location / { location = / { add_header X-A 1; } } }')" = own ]
+    [ "$(_reach 'server { listen 80; location / { location ~ \.php$ { add_header X-A 1; } } }')" = - ]
+    [ "$(_reach 'server { listen 80; location ~ ^/$ { location ~ / { add_header X-A 1; } } }')" = own ]
+}
+
+@test "reach: a regex awk cannot read as PCRE does is taken to match" {
+    # A lookahead is PCRE only, and nginx matches / with this one.
+    [ "$(_reach 'server { listen 80; location / { } location ~ ^/(?!api/) { add_header Cache-Control no-cache; } }')" = own ]
+}
+
+@test "reach: add_header_inherit merge hands it past a level's own, off cuts it" {
+    # nginx 1.29.3+; the mode is inherited like any directive. An if{} may or may
+    # not take the request, so its add_header counts.
+    [ "$(_reach 'server { listen 80; add_header_inherit merge; add_header Strict-Transport-Security max-age=1; }')" = - ]
+    [ "$(_reach 'add_header_inherit merge; server { listen 80; location / { add_header Cache-Control no-store; } }')" = - ]
+    [ "$(_reach 'server { listen 80; location / { add_header_inherit merge; add_header Cache-Control no-store; } }')" = - ]
+    [ "$(_reach 'server { listen 80; location / { add_header_inherit off; } }')" = own ]
+    [ "$(_reach 'server { listen 80; location / { if ($arg_x) { add_header X-A 1; } } }')" = own ]
+    [ "$(_reach 'server { listen 80; location / { if ($arg_x) { add_header_inherit off; } } }')" = own ]
+    [ "$(_reach 'server { listen 80; location / { add_header X-A 1; if ($arg_x) { add_header_inherit merge; } } }')" = own ]
+}
+
 @test "headers: the fix is offered for the sites it reaches, the others named apart" {
     _dump_http 'server { listen 80; server_name a.example; }
 server { listen 80; server_name b.example; add_header Cache-Control no-store; }'

@@ -476,6 +476,7 @@ declare -gA CHECK_SCORE_CATEGORY=(
 
     # === Nginx Module - conditional (only if Nginx installed) ===
     ["nginx.not_installed"]="info"
+    ["nginx.not_on_path"]="info"
     ["nginx.catchall_exists"]="conditional"
     ["nginx.no_catchall"]="conditional"
     # DoS hardening (CIS NGINX 5.2.1 + nginx mitigation guide)
@@ -709,6 +710,7 @@ declare -gA CHECK_SCORE_CATEGORY=(
     ["malware.ld_preload_packaged"]="info"
     ["malware.ld_so_preload_packaged"]="info"
     ["malware.procps_missing"]="info"           # not measured: no score either way
+    ["malware.systemd_env_unreadable"]="info"   # likewise
 
     # === Webapp Module - conditional (only if webserver installed) ===
     ["webapp.nginx_server_tokens"]="conditional"

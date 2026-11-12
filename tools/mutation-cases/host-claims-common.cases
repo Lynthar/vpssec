@@ -15,3 +15,8 @@ run_case "claims/debian-family-rejected" 1 \
 run_case "claims/fix-mode-widened-too" 1 \
     '    [[ "$os" == "debian" || "$os" == "ubuntu" ]]' \
     '    [[ "$os" == "debian" || "$os" == "ubuntu" || "${VPSSEC_DISTRO_FAMILY:-}" == "debian" ]]'
+
+# Both the webapp check and the engine's gate ask it.
+run_case "claims/nginx-process-not-asked" 1 \
+    '    pgrep -x nginx >/dev/null 2>&1' \
+    '    false'

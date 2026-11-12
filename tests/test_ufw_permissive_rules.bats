@@ -123,6 +123,16 @@ Anywhere open to Anywhere (review if needed)
     _vpssec_refute grep -qE 'OpenSSH|Nginx' <<<"$output"
 }
 
+@test "permissive rules: a comment on an app rule leaves it resolved to its ports" {
+    # Real ufw 0.36.2 with a comment on every allow: `# <text>` in the table, a
+    # trailing comment=<hex> on the tuple; 3306 is denied.
+    printf 'Port 2222\n' > "$SSH_CONFIG"
+    VPSSEC_TEST_UFW_STATUS="$(_vpssec_repo_root)/tests/fixtures/ufw-status-comments-debian12.txt"
+    UFW_USER_RULES="$(_vpssec_repo_root)/tests/fixtures/ufw-user-rules-comments-debian12.txt"
+    run _ufw_find_permissive_rules
+    [ "$output" = "8443/tcp open to Anywhere (review if needed)" ]
+}
+
 # Real ufw 0.36.2: every form a rule opening every port takes in the To column
 # (an IPv6 address has no "(v6)"), next to SSH, 8443, a source-bound rule and an
 # interface rule.

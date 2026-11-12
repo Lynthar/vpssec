@@ -81,6 +81,12 @@ run_case "permissive/app-name-undecoded" 1 \
     '            gsub(/%20/, " ", app)' \
     '            app = app'
 
+# The trailing comment= field read as the direction: a commented app rule resolves
+# to nothing and is listed.
+run_case "permissive/app-comment-read-as-direction" 1 \
+    '            if (n < 12 || ($4 != "allow" && $4 != "limit") || $n !~ /^in(_|$)/) next' \
+    '            if (n < 12 || ($4 != "allow" && $4 != "limit") || $NF !~ /^in(_|$)/) next'
+
 run_case "permissive/app-ports-unchecked" 1 \
     '            [[ "$ok" == *" $p "* ]] || return 1' \
     '            :'

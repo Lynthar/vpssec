@@ -25,6 +25,27 @@ run_case "include/relative-not-resolved" 1 \
     '            if (substr(pat, 1, 1) != "/") pat = confdir "/" pat' \
     '            pat = pat'
 
+# The headers check finds the location serving / by these.
+run_case "locations/no-line-of-its-own" 1 \
+    '                            statement(toks, nt, depth - 1)' \
+    '                            nt = nt'
+
+run_case "locations/line-inside-itself" 1 \
+    '                            statement(toks, nt, depth - 1)' \
+    '                            statement(toks, nt, depth)'
+
+run_case "locations/path-not-nested" 1 \
+    '                            lids[depth] = lids[depth] (lids[depth] != "" ? "/" : "") (++nloc)' \
+    '                            lids[depth] = ++nloc'
+
+run_case "locations/outer-path-lost" 1 \
+    '                        lids[depth] = lids[depth - 1]' \
+    '                        lids[depth] = ""'
+
+run_case "locations/path-dropped" 1 \
+    '            print sids[depth] "\t" ctx "\t" toks[1] "\t" args (lids[depth] != "" ? "\t" lids[depth] : "")' \
+    '            print sids[depth] "\t" ctx "\t" toks[1] "\t" args'
+
 run_case "dump/cache-ignored" 1 \
     '        ok) return 0 ;;' \
     '        ok) ;;'

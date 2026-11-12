@@ -47,8 +47,18 @@ _stmts() {
 
 @test "statements: ; and { inside quotes do not end or open anything" {
     run _stmts 'http { server { location / { return 200 "a;b{c}"; } listen 81; } }'
-    grep -qxF '1|http/server/location|return|200 a;b{c}' <<<"$output"
+    grep -qxF '1|http/server/location|return|200 a;b{c}|1' <<<"$output"
     grep -qxF '1|http/server|listen|81' <<<"$output"
+}
+
+@test "statements: a location gets a line, and what is inside it the path of locations" {
+    run _stmts 'http { server { location = / { add_header A 1; } location /x { location ~ \.php$ { return 404; } } listen 80; } }'
+    [ "$output" = '1|http/server|location|= /|1
+1|http/server/location|add_header|A 1|1
+1|http/server|location|/x|2
+1|http/server/location|location|~ \.php$|2/3
+1|http/server/location/location|return|404|2/3
+1|http/server|listen|80' ]
 }
 
 @test "statements: \${var} is a variable, not a block" {

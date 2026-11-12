@@ -1,0 +1,4 @@
+LANG=C.UTF-8
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+LD_PRELOAD=/tmp/m.so
+SP=$'a b'

@@ -1667,6 +1667,12 @@ nginx_present() {
     check_command nginx
 }
 
+# An nginx process is running. Where nginx_present says no, it is a build off PATH
+# (a source build in /usr/local/nginx/sbin): here, but nothing can ask its config.
+nginx_running() {
+    pgrep -x nginx >/dev/null 2>&1
+}
+
 # The resolved config (`nginx -T`) into NGINX_DUMP, once; call it in this shell,
 # never in $(...). Returns 1 when the config fails nginx -t (first emerg line in
 # NGINX_DUMP_ERROR): report that and skip, never grade the files nginx refuses.
@@ -1695,9 +1701,9 @@ nginx_dump_reset() {
     _NGINX_DUMP_STATE=""
 }
 
-# `nginx -T` text on stdin -> "<server id>\t<context>\t<name>\t<args>" per directive,
-# includes inlined where they occur. Server ids count server{} blocks from 1 (0 = none),
-# context reads "http/server/...", args are space-joined and unquoted.
+# `nginx -T` text on stdin -> "<server id>\t<context>\t<name>\t<args>" per directive, includes
+# inlined, server ids from 1 (0 = none), context "http/server/...", args unquoted. A location{}
+# gets a line too; it and all inside it add "\t<location ids from 1, outermost first, /-joined>".
 nginx_statements() {
     # -T prints each file once, under "# configuration file <path>:", in the order
     # nginx first read it; relative includes resolve against the main file's dir.
@@ -1738,7 +1744,8 @@ nginx_statements() {
             for (f = 1; f <= nfiles; f++)
                 if (!active[f] && order[f] ~ re) run(f)
         }
-        function statement(toks, nt,   i, args, ctx) {
+        # A directive in the blocks open down to depth d.
+        function statement(toks, nt, d,   i, args, ctx) {
             if (nt == 0) return
             if (toks[1] == "include" && hdr) {
                 for (i = 2; i <= nt; i++) include(toks[i])
@@ -1747,8 +1754,8 @@ nginx_statements() {
             args = ""
             for (i = 2; i <= nt; i++) args = args (i > 2 ? " " : "") toks[i]
             ctx = ""
-            for (i = 1; i <= depth; i++) ctx = ctx (i > 1 ? "/" : "") names[i]
-            print sids[depth] "\t" ctx "\t" toks[1] "\t" args
+            for (i = 1; i <= d; i++) ctx = ctx (i > 1 ? "/" : "") names[i]
+            print sids[depth] "\t" ctx "\t" toks[1] "\t" args (lids[depth] != "" ? "\t" lids[depth] : "")
         }
         # nginx tokenizing: `#` starts a comment only between tokens, quotes group
         # (backslash escapes inside them), and `${` opens a variable, not a block.
@@ -1774,7 +1781,7 @@ nginx_statements() {
                     }
                     if (c == ";") {
                         if (intok) { toks[++nt] = tok; tok = ""; intok = 0 }
-                        statement(toks, nt); nt = 0
+                        statement(toks, nt, depth); nt = 0
                         continue
                     }
                     if (c == "{") {
@@ -1783,6 +1790,11 @@ nginx_statements() {
                         depth++
                         names[depth] = (nt > 0 ? toks[1] : "")
                         sids[depth] = (names[depth] == "server") ? ++nserver : sids[depth - 1]
+                        lids[depth] = lids[depth - 1]
+                        if (names[depth] == "location") {
+                            lids[depth] = lids[depth] (lids[depth] != "" ? "/" : "") (++nloc)
+                            statement(toks, nt, depth - 1)
+                        }
                         nt = 0
                         continue
                     }

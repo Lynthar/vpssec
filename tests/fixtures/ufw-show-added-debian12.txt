@@ -1,0 +1,6 @@
+Added user rules (see 'ufw status' for running firewall):
+ufw allow OpenSSH comment 'ssh'
+ufw allow 'Nginx Full' comment 'web'
+ufw limit 2222/tcp comment 'alt ssh'
+ufw allow 8443/tcp comment 'admin panel'
+ufw deny 3306/tcp

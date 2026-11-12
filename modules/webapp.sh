@@ -254,8 +254,8 @@ _webapp_nginx_server_tokens() {
     ' | sort -n | cut -f2
 }
 
-# The http servers the headers check requests, one per line: "url\t<url>\t<curl --resolve
-# entry, or ->\t<own: it sets add_header itself, or ->", or "unchecked\t<name>\t<listen|name>"
+# The http servers the headers check requests, one per line: "url\t<url>\t<curl --resolve entry,
+# or ->\t<own: http{}'s add_header may not reach its /, or ->", or "unchecked\t<name>\t<listen|name>"
 # for one this host cannot address. One with ssl_reject_handshake on serves no page.
 _webapp_nginx_header_targets() {
     nginx_statements <<<"$NGINX_DUMP" | LC_ALL=C awk -F'\t' '
@@ -278,13 +278,73 @@ _webapp_nginx_header_targets() {
             }
             return P ~ /^[0-9]+$/ && (A ~ /^[0-9.]+$/ || A ~ /:/)
         }
+        # A location of server s with args a: its id ends path p, its parent is the one before.
+        function loc(s, a, p,   n, w, id, up) {
+            n = split(p, w, "/"); id = w[n]; up = (n > 1) ? w[n - 1] : 0
+            kid[s, up, ++nk[s, up]] = id
+            if (match(a, /^(=|\^~|~\*|~) /)) { mod[id] = substr(a, 1, RLENGTH - 1); uri[id] = substr(a, RLENGTH + 1) }
+            else if (a ~ /^~\*/) { mod[id] = "~*"; uri[id] = substr(a, 3) }
+            else if (a ~ /^[=~]/) { mod[id] = substr(a, 1, 1); uri[id] = substr(a, 2) }
+            else { mod[id] = ""; uri[id] = a }
+        }
+        # Does a level hand down the add_header it inherits? Not where it sets its own,
+        # unless add_header_inherit is merge, and never under off.
+        function passes(own, m) { return m == "merge" || (m != "off" && !own) }
+        # Location c entered under add_header_inherit m: one that may block is noted
+        # in BLOCK; returns the mode c hands to its own locations.
+        function level(c, m) {
+            if (c in inh) m = inh[c]
+            if (!passes((c in hdr), m)) BLOCK = 1
+            return m
+        }
+        # Does regex location re match "/"? 2 = cannot tell: awk reads PCRE the same
+        # way only without (?, \ before a letter or digit, braces, stacked quantifiers or empty |.
+        function rx(re) {
+            if (re ~ /\(\?|\\[[:alnum:]]|[{}]|[*+?][*+]|\(\)|\(\||\|\)|^\||\|$|\|\|/) return 2
+            return "/" ~ re
+        }
+        # The locations under p (0 = the server) that may serve "/", as nginx picks:
+        # "= /" ends it; a prefix "/" is taken and its own locations searched, then,
+        # unless it is ^~, regexes in order. 1 when the pick is certain.
+        function slash(s, p, m,   k, c, e, pre, r) {
+            e = pre = 0
+            for (k = 1; k <= nk[s, p]; k++) {
+                c = kid[s, p, k]
+                if (uri[c] != "/") continue
+                if (mod[c] == "=") e = c
+                else if (mod[c] == "" || mod[c] == "^~") pre = c
+            }
+            if (e) { level(e, m); return 1 }
+            if (pre) {
+                if (slash(s, pre, level(pre, m))) return 1
+                if (mod[pre] == "^~") return 0
+            }
+            for (k = 1; k <= nk[s, p]; k++) {
+                c = kid[s, p, k]
+                if (mod[c] != "~" && mod[c] != "~*") continue
+                if (!(r = rx(uri[c]))) continue
+                slash(s, c, level(c, m))
+                if (r == 1) return 1
+            }
+            return 0
+        }
+        $1 == 0 && $2 == "http" && $3 == "add_header_inherit" { top = $4 }
         $2 ~ /^http\/server(\/|$)/ { seen[$1] = 1; if ($1 > last) last = $1 }
+        $2 ~ /^http\/server/ && $3 == "location" { loc($1, $4, $5); next }
+        # In an if{} the location may or may not take it: counted as its own.
+        $2 ~ /^http\/server\// && NF > 4 && ($3 == "add_header" || $3 == "add_header_inherit") {
+            n = split($5, w, "/")
+            if ($3 == "add_header" || ($2 ~ /\/if$/ && $4 == "off")) hdr[w[n]] = 1
+            else if ($2 !~ /\/if$/) inh[w[n]] = $4
+            next
+        }
         $2 != "http/server" { next }
         $3 == "listen" { L[$1, ++nl[$1]] = $4 }
         $3 == "server_name" { names[$1] = names[$1] " " $4 }
         $3 == "ssl" && $4 == "on" { sslon[$1] = 1 }
         $3 == "ssl_reject_handshake" && $4 == "on" { reject[$1] = 1 }
         $3 == "add_header" { own[$1] = 1 }
+        $3 == "add_header_inherit" { sinh[$1] = $4 }
         END {
             # A request with no matching name goes to the default_server of its
             # socket, else to the first server that listens there.
@@ -327,7 +387,10 @@ _webapp_nginx_header_targets() {
                 } else {
                     host = name; resolve = name ":" bP ":" addr
                 }
-                print "url\t" (bT ? "https" : "http") "://" host (bP == (bT ? "443" : "80") ? "" : ":" bP) "/\t" resolve "\t" ((s in own) ? "own" : "-")
+                mode = (s in sinh) ? sinh[s] : (top != "" ? top : "on")
+                BLOCK = !passes((s in own), mode)
+                slash(s, 0, mode)
+                print "url\t" (bT ? "https" : "http") "://" host (bP == (bT ? "443" : "80") ? "" : ":" bP) "/\t" resolve "\t" (BLOCK ? "own" : "-")
             }
         }
     '
@@ -1161,14 +1224,13 @@ webapp_audit() {
                 suggestion="$(i18n 'nginx.config_unreadable_fix')"
             _module_record_failure webapp query
         fi
-    # A running nginx whose binary is not on PATH (a source build in
-    # /usr/local/nginx/sbin) is not audited: say so, not "no web server".
-    elif pgrep -x nginx >/dev/null 2>&1; then
+    # Running off PATH: not audited, and said so rather than "no web server".
+    elif nginx_running; then
         has_webserver=true
         check_emit "webapp.nginx_not_on_path" info failed \
-            title="$(i18n 'webapp.nginx_not_on_path')" \
-            desc="$(i18n 'webapp.nginx_not_on_path_desc')" \
-            suggestion="$(i18n 'webapp.nginx_not_on_path_fix')"
+            title="$(i18n 'nginx.not_on_path')" \
+            desc="$(i18n 'nginx.not_on_path_desc')" \
+            suggestion="$(i18n 'nginx.not_on_path_fix')"
     fi
 
     # === Apache Security ===

@@ -23,6 +23,10 @@ setup() {
     # ufw's own rule store, which is what the coverage predicate reads.
     UFW_USER_RULES="$BATS_TEST_TMPDIR/user.rules"
     UFW_USER6_RULES="$BATS_TEST_TMPDIR/user6.rules"
+    # What `ufw show added` prints: real ufw 0.36.2's answer for no rules, unless a
+    # test seeds the store and this together from one recording.
+    ufw_shown="$BATS_TEST_TMPDIR/ufw-shown"
+    cp "$(_vpssec_repo_root)/tests/fixtures/ufw-show-added-none-debian12.txt" "$ufw_shown"
 
     # get_ssh_ports asks systemd before sshd: with no stub the host's own
     # ssh.socket answers, and the CI runner's is active on 22.
@@ -90,6 +94,7 @@ _ufw_working() {
 rules="$UFW_USER_RULES"
 state="$ufw_state"
 policy="$ufw_policy"
+shown="$ufw_shown"
 fail_port="$failing_port"
 [[ -n "$refused" && "\$1" == "$refused" ]] && exit 1
 case "\$1" in
@@ -117,7 +122,7 @@ case "\$1" in
             printf 'Logging: on (low)\nDefault: %s (incoming), allow (outgoing), disabled (routed)\n' "\$(cat "\$policy")"
         fi
         ;;
-    show)    cat "\$rules" ;;
+    show)    cat "\$shown" ;;
     default) [[ "\$3" == incoming ]] && printf '%s\n' "\$2" > "\$policy" ;;
 esac
 exit 0
@@ -203,11 +208,17 @@ _call_at() {
 @test "enable: the confirmation lists the rules ufw holds, though ufw is inactive" {
     # ufw.enable is only offered while ufw is inactive, and an inactive ufw's
     # `status` prints nothing but "Status: inactive"; `show added` lists them.
-    _tuple "deny tcp 3306 0.0.0.0/0 any 0.0.0.0/0 in"
+    # Store and listing are one recording of real ufw 0.36.2, commented rules too.
+    local fx
+    fx="$(_vpssec_repo_root)/tests/fixtures"
+    cp "$fx/ufw-user-rules-comments-debian12.txt" "$UFW_USER_RULES"
+    cp "$fx/ufw-user6-rules-comments-debian12.txt" "$UFW_USER6_RULES"
+    cp "$fx/ufw-show-added-debian12.txt" "$ufw_shown"
     confirm_critical() { echo "CONFIRM-PROMPT" >&2; return 1; }
 
     run _ufw_fix_enable
-    [[ "$output" == *"deny tcp 3306"*"CONFIRM-PROMPT"* ]]
+    [[ "$output" == *"ufw deny 3306/tcp"*"CONFIRM-PROMPT"* ]]
+    [[ "$output" == *"ufw allow 'Nginx Full' comment 'web'"*"CONFIRM-PROMPT"* ]]
 }
 
 @test "enable: declining removes every rule the fix added" {

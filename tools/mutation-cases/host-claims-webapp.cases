@@ -34,7 +34,7 @@ run_case "claims/no-root-still-passes" 1 \
 
 # A source-built nginx off PATH is reported as no web server again.
 run_case "claims/nginx-off-path-unnamed" 1 \
-    '    elif pgrep -x nginx >/dev/null 2>&1; then' \
+    '    elif nginx_running; then' \
     '    elif false; then'
 
 # The Apache advice names a file again without asking which one sets it.

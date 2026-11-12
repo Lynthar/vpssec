@@ -272,6 +272,34 @@ _webapp_bare_host() {
     _vpssec_refute grep -q 'webapp.nginx_not_on_path' "$VPSSEC_STATE/checks.json"
 }
 
+# The nginx module through the engine, whose gate keeps it from running: pgrep
+# exits $1 for `pgrep -x nginx`.
+_nginx_gated_run() {
+    # shellcheck source=/dev/null
+    source "$(_vpssec_repo_root)/core/security_levels.sh"
+    # shellcheck source=/dev/null
+    source "$(_vpssec_repo_root)/core/engine.sh"
+    _vpssec_absent_command nginx
+    _vpssec_stub pgrep "$1"
+    VPSSEC_MODULE_ORDER=(nginx)
+    module_load_all "" ""
+    _run_audit_pass >/dev/null
+}
+
+@test "nginx: through the engine, one running off PATH is unaudited, not 'not installed'" {
+    _nginx_gated_run 0
+    [ "$(_check_field nginx.not_on_path status)" = "failed" ]
+    [ "$(_check_field nginx.not_on_path title)" = "$(i18n nginx.not_on_path)" ]
+    [ "${CHECK_SCORE_CATEGORY[nginx.not_on_path]}" = "info" ]
+    _vpssec_refute grep -q 'nginx.not_installed' "$VPSSEC_STATE/checks.json"
+}
+
+@test "nginx: through the engine, no binary and no process is still not installed" {
+    _nginx_gated_run 1
+    [ "$(_check_field nginx.not_installed status)" = "passed" ]
+    _vpssec_refute grep -q 'nginx.not_on_path' "$VPSSEC_STATE/checks.json"
+}
+
 @test "webapp: detection goes through the project's own command wrapper" {
     # Stub caddy so `command -v caddy` succeeds while check_command reports it
     # absent: the two answers differing is the only way to tell the project's own
