@@ -3,16 +3,19 @@
 What an integration may depend on, and which version bump is allowed to
 change it. Versions are semver (`MAJOR.MINOR.PATCH`); this contract applies
 from v0.6.0, and 0.x releases keep it: what it reserves for a MAJOR release
-waits for 1.0.0. Anything not listed here — internal file layouts, `state/`,
+waits for 1.0.0. The one exception is check and fix identifiers, stable only
+from 1.0.0 (below). Anything not listed here — internal file layouts, `state/`,
 log formats, i18n keys, function names — is not an interface and may change
 in any release.
 
 ## Stable identifiers
 
-- **`check_id` and `fix_id` are stable names.** They are renamed or removed
-  only in a MAJOR release; new ones may appear in any MINOR. Pin dashboards,
-  suppressions and tooling to these, never to display text — titles and
-  descriptions are localized and rewritten freely.
+- **`check_id` and `fix_id` are stable names from 1.0.0.** From then on they
+  are renamed or removed only in a MAJOR release. Before 1.0.0 a MINOR release
+  may rename or remove one, and its CHANGELOG entry names each such change.
+  New ones may appear in any MINOR. Pin dashboards, suppressions and tooling
+  to these, never to display text — titles and descriptions are localized and
+  rewritten freely.
 - **CLI flags** documented in the README are removed or repurposed only in a
   MAJOR release.
 

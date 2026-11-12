@@ -251,7 +251,7 @@ declare -gA FIX_SELF_CONFIRMED=(
     ["ssh.disable_password_auth"]="true"        # confirm_critical after SSH-key precondition (modules/ssh.sh)
     ["ssh.disable_root_login"]="true"           # confirm_critical after admin-user precondition (modules/ssh.sh)
     ["ufw.enable"]="true"                        # confirm_critical after showing current rules (modules/ufw.sh)
-    ["docker.enable_no_new_privileges"]="true"  # confirm_critical before daemon restart (modules/docker.sh)
+    ["docker.enable_no_new_privileges"]="true"  # confirm_critical after its preconditions, before daemon.json is written (modules/docker.sh)
 )
 
 # Fixes that can NEVER resolve the finding they hang off, on any host. They
@@ -699,6 +699,7 @@ declare -gA CHECK_SCORE_CATEGORY=(
     ["malware.mining_pool_connection"]="required"
     ["malware.cpu_anomaly"]="info"
     ["malware.webshell"]="required"
+    ["malware.webshell_phar"]="info"           # often a tool archive: shown, not scored
     ["malware.deleted_binary"]="required"
     ["malware.memfd_execution"]="required"
     ["malware.suspicious_path"]="info"

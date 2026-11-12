@@ -124,10 +124,34 @@ SH
     VPSSEC_MODULE_ORDER=(docker)
 
     module_load_all "" ""
+    DOCKER_SNAP_CLI="$BATS_TEST_TMPDIR/absent/docker"
     _run_audit_pass >/dev/null
 
     [ "$(_check_field docker.not_installed status)" = "passed" ]
     _vpssec_refute grep -q 'docker.daemon_unreachable' "$VPSSEC_STATE/checks.json"
+}
+
+@test "docker: snap's Docker off root's PATH is unreachable, not absent" {
+    # Debian's sudo secure_path has no /snap/bin: `sudo vpssec` finds no docker CLI
+    # while snap.docker.dockerd runs (lab, docker snap 29.8.0 on Debian 13).
+    # shellcheck source=/dev/null
+    source "$(_vpssec_repo_root)/core/security_levels.sh"
+    # shellcheck source=/dev/null
+    source "$(_vpssec_repo_root)/core/engine.sh"
+    _vpssec_absent_command docker
+    _vpssec_absent_command podman
+    _vpssec_stub getent 0 ""
+    VPSSEC_MODULE_ORDER=(docker)
+
+    module_load_all "" ""
+    DOCKER_SNAP_CLI="$BATS_TEST_TMPDIR/snap-bin/docker"
+    mkdir -p "${DOCKER_SNAP_CLI%/*}"
+    printf '#!/bin/sh\n' > "$DOCKER_SNAP_CLI"
+    chmod +x "$DOCKER_SNAP_CLI"
+    _run_audit_pass >/dev/null
+
+    [[ "$(_check_field docker.daemon_unreachable desc)" == *"snap-docker"* ]]
+    _vpssec_refute grep -q 'docker.not_installed' "$VPSSEC_STATE/checks.json"
 }
 
 @test "docker: a host with no runtime at all still reports not installed" {

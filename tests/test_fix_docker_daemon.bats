@@ -299,27 +299,40 @@ _completed_fixes() {
     _vpssec_stub_called systemctl 'restart docker$'
 }
 
-@test "no-new-privileges fix: declining the restart is a failure, the setting staged" {
-    # Not loaded is not on: the daemon keeps creating containers without it.
-    # An answered "no" (the flag set) after daemon.json is written still fails.
+@test "no-new-privileges fix: declining writes nothing and is a skipped fix" {
+    # Asked before daemon.json is written: a staged setting would load at the
+    # next restart or boot, which the "no" was about.
     _daemon_picks_up_on restart
+    printf '{"log-driver": "journald"}\n' > "$DOCKER_DAEMON_JSON"
     confirm_critical() { _VPSSEC_DECLINED=1; return 1; }
+    _vpssec_begin_backup_session
 
     run execute_fix docker.enable_no_new_privileges
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     _vpssec_refute grep -q 'docker.enable_no_new_privileges' <<<"$(_completed_fixes)"
-    jq -e '.["no-new-privileges"] == true' "$DOCKER_DAEMON_JSON"
+    [ "$(cat "$DOCKER_DAEMON_JSON")" = '{"log-driver": "journald"}' ]
+    [ ! -e "${VPSSEC_BACKUP_SESSION}${DOCKER_DAEMON_JSON}" ]
     _vpssec_refute _vpssec_stub_called systemctl 'restart'
 }
 
-@test "no-new-privileges fix: declining is a failure on an old daemon too" {
-    # Engine 20.10 cannot report the setting, so the fix's own word decides.
+@test "no-new-privileges fix: declining on an old daemon is a skip too, with no file made" {
+    # Engine 20.10 cannot report the setting; no daemon.json to begin with.
     _daemon_picks_up_on restart 20.10.24+dfsg1
     confirm_critical() { _VPSSEC_DECLINED=1; return 1; }
 
     run execute_fix docker.enable_no_new_privileges
+    [ "$status" -eq 2 ]
+    [ ! -e "$DOCKER_DAEMON_JSON" ]
+}
+
+@test "no-new-privileges fix: a refused precondition does not ask" {
+    # The question is about writing and restarting: one that cannot happen is not asked.
+    printf 'this is not json' > "$DOCKER_DAEMON_JSON"
+    confirm_critical() { echo "ASKED"; return 0; }
+
+    run _docker_fix_enable_daemon_setting no-new-privileges true
     [ "$status" -eq 1 ]
-    _vpssec_refute grep -q 'docker.enable_no_new_privileges' <<<"$(_completed_fixes)"
+    [[ "$output" != *ASKED* ]]
 }
 
 @test "no-new-privileges fix: the restart prompt says what a restart does here" {

@@ -1,0 +1,58 @@
+# Plant: a Calico-style node: an active kubelet.service, ip_forward on, and a routed veth
+# (no master) named cali… with its own proxy_arp=1, beside log_martians off.
+# Expect: kernel.network_params_medium → kernel.harden_network → kernel.network_params_ok.
+# postfix: forwarding and the veth's proxy_arp are still 1 — a forwarding host routes
+# through it, and zeroing it cuts the pods behind it off.
+# The fix's runtime values outlive the rollback (it reminds of that), so the audit after
+# it still passes. restore() puts every net.ipv4 / net.ipv6 value back from a snapshot:
+# the netns is shared with the cases after this one.
+TEST_DESC="forwarding host: harden_network leaves a Calico veth's own proxy_arp on"
+EXPECT_ID="kernel.network_params_medium"
+EXPECT_STATUS="failed"
+EXPECT_SEVERITY="low"
+MODULE="kernel"
+FIX_ID="kernel.harden_network"
+EXPECT_FIXED_ID="kernel.network_params_ok"
+EXPECT_FIXED_STATUS="passed"
+EXPECT_ROLLBACK_ID="kernel.network_params_ok"
+EXPECT_ROLLBACK_STATUS="passed"
+EXPECT_ROLLBACK_RC=0
+
+_VETH="cali1f2e3d4c5b6"
+_PEER="vpssec-peer0"
+_UNIT="/etc/systemd/system/kubelet.service"
+_SNAP="/tmp/vpssec-mutation-net.sysctl"
+
+precheck() {
+    command -v ip >/dev/null 2>&1 && [[ -w /proc/sys/net/ipv4/ip_forward && ! -e "$_UNIT" ]] \
+        && ! ip link show "$_VETH" >/dev/null 2>&1
+}
+
+mutate() {
+    sysctl -a -r '^net\.ipv[46]\.' 2>/dev/null > "$_SNAP"
+    printf '[Service]\nExecStart=/bin/sleep infinity\n' > "$_UNIT"
+    systemctl daemon-reload && systemctl start kubelet.service || return 1
+    ip link add "$_VETH" type veth peer name "$_PEER" && ip link set "$_VETH" up || return 1
+    sysctl -w net.ipv4.ip_forward=1 "net.ipv4.conf.$_VETH.proxy_arp=1" \
+        net.ipv4.conf.all.log_martians=0 >/dev/null
+}
+
+postfix() {
+    [[ "$(sysctl -n net.ipv4.ip_forward)" == 1 \
+        && "$(sysctl -n "net.ipv4.conf.$_VETH.proxy_arp")" == 1 ]]
+}
+
+restore() {
+    systemctl stop kubelet.service >/dev/null 2>&1
+    rm -f "$_UNIT" /etc/sysctl.d/99-vpssec-hardening.conf
+    systemctl daemon-reload
+    ip link del "$_VETH" >/dev/null 2>&1
+    local key value
+    if [[ -f "$_SNAP" ]]; then
+        while IFS=' = ' read -r key value; do
+            sysctl -q -w "$key=$value" >/dev/null 2>&1
+        done < "$_SNAP"
+        rm -f "$_SNAP"
+    fi
+    return 0
+}

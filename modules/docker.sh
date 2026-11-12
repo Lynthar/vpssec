@@ -16,6 +16,8 @@ DOCKER_PROBE_TIMEOUT=10
 DOCKER_STALL_MARK="${VPSSEC_STATE}/.docker-stalled"
 # Where a container's main process is read: its status and uid_map.
 DOCKER_PROC_DIR="/proc"
+# Docker from snap: on PATH in a login shell, but not in sudo's secure_path on Debian.
+DOCKER_SNAP_CLI="/snap/bin/docker"
 
 # --- Docker Helper Functions ---
 
@@ -112,14 +114,15 @@ _docker_configured_setting() {
 }
 
 # A container runtime is present that this module cannot audit. Needed because
-# _docker_installed only answers "can I reach a daemon", and both rootless
-# Docker and Podman answer No while running containers.
+# _docker_installed only answers "can I reach a daemon", and rootless Docker,
+# Podman and snap's Docker off PATH answer No while running containers.
 _docker_unaudited_runtime() {
     local found=() uid home
     # check_command, not `command -v`, so a test can make the binary absent.
     # `if`, not `&&`: a bare `a && b` returns non-zero wherever podman is
     # missing and would abort this function under errexit.
     if check_command podman; then found+=("podman"); fi
+    if [[ -x "$DOCKER_SNAP_CLI" ]]; then found+=("snap-docker"); fi
 
     while IFS=: read -r _ _ uid _ _ home _; do
         [[ "$uid" =~ ^[0-9]+$ ]] || continue
@@ -853,6 +856,18 @@ _docker_fix_enable_daemon_setting() {
         return 1
     fi
 
+    # live-restore reloads with every container running; anything else needs a restart,
+    # which stops every container unless live-restore is on. Asked before the write, so
+    # a "no" leaves the host as it was: a skipped fix (confirm_critical ignores --yes).
+    if [[ "$setting" != "live-restore" ]]; then
+        local confirm_key="docker.confirm_restart"
+        _docker_check_live_restore && confirm_key="docker.confirm_restart_live"
+        if ! confirm_critical "$(i18n "$confirm_key")"; then
+            print_warn "$(i18n 'docker.restart_skipped')"
+            return 1
+        fi
+    fi
+
     # UNCONDITIONAL, covering BOTH branches below: for an absent path
     # backup_file records it in .vpssec_created, which is what lets a rollback
     # delete it. Docker ships no daemon.json, so create is the common case.
@@ -878,24 +893,12 @@ _docker_fix_enable_daemon_setting() {
 
     print_ok "$(i18n 'docker.daemon_updated')"
 
-    # live-restore is reloadable: SIGHUP applies it with every container left
-    # running. no-new-privileges needs a restart, which stops every container
-    # unless live-restore is already on; confirm_critical ignores --yes.
     if [[ "$setting" == "live-restore" ]]; then
         if systemctl reload docker 2>/dev/null; then
             print_ok "$(i18n 'docker.reloaded')"
             return 0
         fi
         print_error "$(i18n 'docker.reload_failed')"
-        return 1
-    fi
-    local confirm_key="docker.confirm_restart"
-    _docker_check_live_restore && confirm_key="docker.confirm_restart_live"
-    if ! confirm_critical "$(i18n "$confirm_key")"; then
-        print_warn "$(i18n 'docker.restart_skipped')"
-        # daemon.json is already written, so this "no" is a failure, not a
-        # skipped fix: execute_fix must not read it as a declined one.
-        _VPSSEC_DECLINED=0
         return 1
     fi
     if ! systemctl restart docker 2>/dev/null; then

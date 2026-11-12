@@ -16,6 +16,11 @@ run_case "claims/podman-not-probed" 1 \
     '    if check_command podman; then found+=("podman"); fi' \
     '    :'
 
+# Snap's Docker off sudo's PATH (Debian) reads "not installed" again.
+run_case "claims/snap-docker-not-probed" 1 \
+    '    if [[ -x "$DOCKER_SNAP_CLI" ]]; then found+=("snap-docker"); fi' \
+    '    :'
+
 # Rootless sockets live in the user's runtime dir; dropping the scan makes the
 # most common unreachable case invisible again.
 run_case "claims/rootless-socket-not-scanned" 1 \
