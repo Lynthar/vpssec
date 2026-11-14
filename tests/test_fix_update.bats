@@ -387,6 +387,38 @@ SH
     [[ "$stderr" == *"EOF on stdin at conffile prompt"* ]]
 }
 
+@test "apt_install: a removal apt would make is refused before anything is installed" {
+    # Its own simulation runs under LC_ALL=C, where apt prints machine-readable Remv lines.
+    _vpssec_stub_script apt-get <<'SH'
+if [[ "$1" == -s ]]; then
+    [[ "$LC_ALL" == C ]] && echo 'Remv netfilter-persistent [1.0.23]'
+    echo 'Inst ufw (0.36.2-9 Debian:13.7/stable [all])'
+    exit 0
+fi
+touch "$BATS_TEST_TMPDIR/installed"
+SH
+    run --separate-stderr apt_install ufw
+    [ "$status" -eq 1 ]
+    [ ! -e "$BATS_TEST_TMPDIR/installed" ]
+    [[ "$output$stderr" == *"Installing ufw would remove netfilter-persistent"* ]]
+    grep -q 'refused, it would remove netfilter-persistent' "$VPSSEC_LOGS/vpssec.log"
+}
+
+@test "apt_install: the install itself is told never to remove a package" {
+    # The simulation can go stale before the install runs; --no-remove makes apt abort then.
+    _vpssec_stub apt-get 0
+    run --separate-stderr apt_install ufw
+    [ "$status" -eq 0 ]
+    _vpssec_stub_called apt-get '--no-remove .*install -y ufw'
+}
+
+@test "apt_install: a failed simulation is left to the install, which reports why" {
+    _vpssec_stub apt-get 100 'E: Unable to locate package nosuch'
+    run --separate-stderr apt_install nosuch
+    [ "$status" -eq 100 ]
+    [[ "$stderr" == *"E: Unable to locate package nosuch"* ]]
+}
+
 @test "apt_install: a success prints nothing" {
     _vpssec_stub apt-get 0 'Setting up ufw (0.36.2-1) ...'
     run --separate-stderr apt_install ufw

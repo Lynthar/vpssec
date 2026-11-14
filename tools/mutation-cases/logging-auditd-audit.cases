@@ -1,0 +1,25 @@
+# Mutation cases: tests/test_logging_auditd.bats against modules/logging.sh.
+# mutate-suite: modules/logging.sh tests/test_logging_auditd.bats
+#
+# Only the audit=0 / audit=off branch of the auditd audit; the fixes are in logging.cases.
+
+run_case "kernel-off/never-detected" 1 \
+    '        [[ "$word" == audit=0 || "$word" == audit=off ]] && { echo "$word"; return 0; }' \
+    '        false && { echo "$word"; return 0; }'
+
+run_case "kernel-off/audit-off-missed" 1 \
+    '        [[ "$word" == audit=0 || "$word" == audit=off ]] && { echo "$word"; return 0; }' \
+    '        [[ "$word" == audit=0 ]] && { echo "$word"; return 0; }'
+
+# systemd compares whole words: noaudit=0 or audit=0x leave auditd startable.
+run_case "kernel-off/substring-match" 1 \
+    '        [[ "$word" == audit=0 || "$word" == audit=off ]] && { echo "$word"; return 0; }' \
+    '        [[ "$word" == *audit=0* || "$word" == *audit=off* ]] && { echo "$word"; return 0; }'
+
+run_case "kernel-off/unreadable-taken-as-off" 1 \
+    '    read -ra words 2>/dev/null < "$LOGGING_PROC_CMDLINE" || true' \
+    '    read -ra words 2>/dev/null < "$LOGGING_PROC_CMDLINE" || return 0'
+
+run_case "kernel-off/fix-still-offered" 1 \
+    '            suggestion="$(i18n '"'"'logging.fix_kernel_audit_off'"'"' "param=$param")"' \
+    '            suggestion="$(i18n '"'"'logging.fix_kernel_audit_off'"'"' "param=$param")" fix="logging.enable_auditd"'

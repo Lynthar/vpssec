@@ -18,6 +18,7 @@ AUDIT_RULES_D="/etc/audit/rules.d"
 AUDIT_RULES_FILE="${AUDIT_RULES_D}/99-vpssec.rules"
 # What augenrules --load regenerates from rules.d.
 AUDIT_RULES_COMPILED="/etc/audit/audit.rules"
+LOGGING_PROC_CMDLINE="/proc/cmdline"
 
 # --- Logging Helper Functions ---
 
@@ -98,6 +99,19 @@ _logging_check_audit_installed() {
 
 _logging_auditd_active() {
     systemctl is-active --quiet auditd
+}
+
+# The audit=0 or audit=off word on the kernel command line, if any. auditd.service
+# carries ConditionKernelCommandLine=!audit=0 and !audit=off: with either, a start
+# is skipped and returns 0, so enabling or installing auditd changes nothing.
+_logging_kernel_audit_off() {
+    local -a words=()
+    local word
+    read -ra words 2>/dev/null < "$LOGGING_PROC_CMDLINE" || true
+    for word in "${words[@]}"; do
+        [[ "$word" == audit=0 || "$word" == audit=off ]] && { echo "$word"; return 0; }
+    done
+    return 1
 }
 
 _logging_check_audit_rules() {
@@ -244,6 +258,15 @@ _logging_audit_logrotate() {
 }
 
 _logging_audit_auditd() {
+    local param
+    if param=$(_logging_kernel_audit_off); then
+        check_emit "logging.auditd_inactive" low failed \
+            title="$(i18n 'logging.auditd_kernel_off' "param=$param")" \
+            desc="$(i18n 'logging.auditd_kernel_off_desc' "param=$param")" \
+            suggestion="$(i18n 'logging.fix_kernel_audit_off' "param=$param")"
+        print_severity "low" "$(i18n 'logging.auditd_kernel_off' "param=$param")"
+        return 0
+    fi
     if _logging_check_audit_installed; then
         if _logging_auditd_active; then
             if _logging_check_audit_rules; then

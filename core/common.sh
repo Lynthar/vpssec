@@ -1110,12 +1110,21 @@ apt_refresh_index() {
     DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>/dev/null || true
 }
 
-# Install packages $@ with apt, returning its status. Its output goes to the log,
-# not into the guide, so no prompt may wait there unseen: stdin is /dev/null and
-# dpkg keeps a changed conffile. On failure apt's last lines go to stderr.
+# Install packages $@ with apt: its status, or 1 untouched when it would remove a package.
+# Output goes to the log (apt's last lines to stderr on failure), so no prompt may wait
+# unseen there: stdin is /dev/null and dpkg keeps a changed conffile.
 apt_install() {
-    local out rc=0
-    out=$(DEBIAN_FRONTEND=noninteractive apt-get \
+    local out rc=0 removed
+    # -y removes whatever a new package conflicts with (ufw takes iptables-persistent,
+    # and the boot-time rule loader with it), and rollback cannot reinstall it: refuse.
+    removed=$(LC_ALL=C apt-get -s install "$@" </dev/null 2>/dev/null \
+                  | awk '$1 == "Remv" { printf "%s%s", sep, $2; sep = " " }') || true
+    if [[ -n "$removed" ]]; then
+        print_error "$(i18n 'common.apt_would_remove' "pkgs=$*" "removed=$removed")"
+        log_info "apt-get install -y $*: refused, it would remove $removed"
+        return 1
+    fi
+    out=$(DEBIAN_FRONTEND=noninteractive apt-get --no-remove \
               -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
               install -y "$@" </dev/null 2>&1) || rc=$?
     log_info "apt-get install -y $* exited $rc:"$'\n'"$out"

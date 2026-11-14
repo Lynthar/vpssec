@@ -23,3 +23,7 @@ run_case "status/unreadable-state-silent" 1 \
 run_case "status/unreadable-state-unsaid" 1 \
     "        print_msg \"  \$(i18n 'status.state_unreadable')\"" \
     '        print_msg ""'
+
+run_case "status/rolled-back-latest-unsaid" 1 \
+    '        if [[ -n "$rolled" ]]; then' \
+    '        if false; then'

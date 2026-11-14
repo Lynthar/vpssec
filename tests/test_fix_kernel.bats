@@ -1626,3 +1626,117 @@ kernel.aslr_unknown failed " ]
     [ "$(_runtime fs.suid_dumpable)" = 2 ]
     _vpssec_refute grep -q "suid_dumpable" "$VPSSEC_SYSCTL_CONF"
 }
+
+# ==============================================================================
+# A sysctl.d file that sorts after the drop-in, which systemd-sysctl applies later
+# ==============================================================================
+
+# The value systemd-sysctl leaves key $1 at after the drop-in and files $2...
+_boot_value() {
+    local param="$1"
+    shift
+    printf '%s\n' "$param" | _kernel_boot_values 1 "$VPSSEC_SYSCTL_CONF" "$@" | cut -f2
+}
+
+@test "harden_network: a sysctl.d file sorting after the drop-in is overridden at its end" {
+    # BandwagonHost's image ships /etc/sysctl.d/sysctl.conf: no number, so it sorts
+    # after 99-vpssec-hardening.conf and put rp_filter=0 back at every boot.
+    _host_static_ipv6
+    KERNEL_SYSCTL_BOOT_DIRS=()
+    mkdir -p "$SYSCTL_D"
+    local vendor="$SYSCTL_D/sysctl.conf" stock=$'net.core.default_qdisc=fq\nnet.ipv4.conf.all.log_martians=0'
+    printf '%s\n' "$stock" > "$vendor"
+    _sysctl_seed net.ipv4.conf.all.log_martians 0
+    _vpssec_begin_backup_session
+
+    run _kernel_fix_network_params
+    [ "$status" -eq 0 ]
+    _dropin_has net.ipv4.conf.all.log_martians 1
+    [ "$(_boot_value net.ipv4.conf.all.log_martians "$vendor")" = 1 ]
+    [ "$(head -2 "$vendor")" = "$stock" ]
+    [ "$(cat "${VPSSEC_BACKUP_SESSION}${vendor}")" = "$stock" ]
+}
+
+@test "harden_network: a sysctl.d file sorting before the drop-in is left alone" {
+    _host_static_ipv6
+    KERNEL_SYSCTL_BOOT_DIRS=()
+    mkdir -p "$SYSCTL_D"
+    printf 'net.ipv4.conf.all.log_martians=0\n' > "$SYSCTL_D/10-vendor.conf"
+    _sysctl_seed net.ipv4.conf.all.log_martians 0
+    _vpssec_begin_backup_session
+
+    run _kernel_fix_network_params
+    [ "$status" -eq 0 ]
+    [ "$(cat "$SYSCTL_D/10-vendor.conf")" = 'net.ipv4.conf.all.log_martians=0' ]
+    [ ! -e "${VPSSEC_BACKUP_SESSION}$SYSCTL_D/10-vendor.conf" ]
+}
+
+@test "harden_network: a file sorting before the drop-in is never edited, even when the drop-in was not written" {
+    # Then that earlier file is where the boot value comes from; the failed persist is
+    # already the fix's failure, and the earlier file is not what undoes it.
+    _host_static_ipv6
+    KERNEL_SYSCTL_BOOT_DIRS=()
+    mkdir -p "$SYSCTL_D"
+    printf 'net.ipv4.conf.all.log_martians=0\n' > "$SYSCTL_D/10-vendor.conf"
+    _sysctl_seed net.ipv4.conf.all.log_martians 0
+    _kernel_write_sysctl() { return 1; }
+
+    run _kernel_fix_network_params
+    [ "$status" -eq 1 ]
+    [ "$(cat "$SYSCTL_D/10-vendor.conf")" = 'net.ipv4.conf.all.log_martians=0' ]
+}
+
+@test "harden_kernel: a later sysctl.d file holding a stricter value is left alone, never lowered" {
+    # ptrace_scope 2 meets >=1 and differs from the 1 the fix writes, so it is the
+    # value in force at boot; overriding it there would weaken the operator's choice.
+    KERNEL_SYSCTL_BOOT_DIRS=()
+    mkdir -p "$SYSCTL_D"
+    printf 'kernel.yama.ptrace_scope = 2\n' > "$SYSCTL_D/zz-local.conf"
+    _sysctl_seed kernel.yama.ptrace_scope 0
+    _vpssec_begin_backup_session
+
+    run _kernel_fix_kernel_params
+    [ "$status" -eq 0 ]
+    _dropin_has kernel.yama.ptrace_scope 1
+    [ "$(cat "$SYSCTL_D/zz-local.conf")" = 'kernel.yama.ptrace_scope = 2' ]
+    [ ! -e "${VPSSEC_BACKUP_SESSION}$SYSCTL_D/zz-local.conf" ]
+}
+
+@test "harden_network: a later file outside /etc/sysctl.d, or a link there, is named and not edited" {
+    # A package's file is overwritten on its next upgrade, and a link would have to
+    # be followed to some other file: say where the weak value comes from instead.
+    _host_static_ipv6
+    local lib="$BATS_TEST_TMPDIR/usr-lib-sysctl.d"
+    KERNEL_SYSCTL_BOOT_DIRS=("$lib")
+    mkdir -p "$SYSCTL_D" "$lib"
+    printf 'net.ipv4.conf.all.log_martians=0\n' > "$lib/zz-vendor.conf"
+    printf 'net.ipv4.conf.default.log_martians=0\n' > "$BATS_TEST_TMPDIR/real.conf"
+    ln -s "$BATS_TEST_TMPDIR/real.conf" "$SYSCTL_D/zz-link.conf"
+    _sysctl_seed net.ipv4.conf.all.log_martians 0
+    _sysctl_seed net.ipv4.conf.default.log_martians 0
+    i18n_load en_US
+    export VPSSEC_QUIET_SCAN=0
+
+    run _kernel_fix_network_params
+    [ "$status" -eq 0 ]
+    [ "$(cat "$lib/zz-vendor.conf")" = 'net.ipv4.conf.all.log_martians=0' ]
+    [ "$(cat "$BATS_TEST_TMPDIR/real.conf")" = 'net.ipv4.conf.default.log_martians=0' ]
+    [ -L "$SYSCTL_D/zz-link.conf" ]
+    [[ "$output" == *"net.ipv4.conf.all.log_martians is still set to 0 at boot by $lib/zz-vendor.conf:1"* ]]
+    [[ "$output" == *"net.ipv4.conf.default.log_martians is still set to 0 at boot by $SYSCTL_D/zz-link.conf:1"* ]]
+}
+
+@test "harden_kernel: a sysctl.d file sorting after the drop-in is overridden at its end" {
+    KERNEL_SYSCTL_BOOT_DIRS=()
+    mkdir -p "$SYSCTL_D"
+    printf 'kernel.kptr_restrict = 0\n' > "$SYSCTL_D/zz-local.conf"
+    _sysctl_seed kernel.kptr_restrict 0
+    _vpssec_begin_backup_session
+
+    run _kernel_fix_kernel_params
+    [ "$status" -eq 0 ]
+    _kernel_value_meets "$(_boot_value kernel.kptr_restrict "$SYSCTL_D/zz-local.conf")" \
+        "$(_kernel_param_expected kernel.kptr_restrict)"
+    [ "$(head -1 "$SYSCTL_D/zz-local.conf")" = 'kernel.kptr_restrict = 0' ]
+    [ -e "${VPSSEC_BACKUP_SESSION}$SYSCTL_D/zz-local.conf" ]
+}

@@ -121,6 +121,28 @@ state_record_audit() {
     fi
 }
 
+# Record that backup session $1 was fully rolled back, and when. Kept here, never in
+# the session directory: rollback restores every file found there onto the system.
+state_record_rollback() {
+    local ts="$1" timestamp temp_file
+    timestamp=$(date -Iseconds)
+    [[ -f "$STATE_OK_FILE" ]] || echo '{"completed_fixes": [], "last_run": null}' > "$STATE_OK_FILE"
+    temp_file=$(mktemp "${STATE_OK_FILE}.XXXXXX") || return 1
+    if jq --arg s "$ts" --arg t "$timestamp" '.rolled_back[$s] = $t' \
+        "$STATE_OK_FILE" > "$temp_file" 2>/dev/null; then
+        mv -f "$temp_file" "$STATE_OK_FILE"
+    else
+        rm -f "$temp_file"
+        return 1
+    fi
+}
+
+# When backup session $1 was last fully rolled back; nothing if never.
+state_rollback_time() {
+    [[ -f "$STATE_OK_FILE" ]] || return 0
+    jq -r --arg s "$1" '.rolled_back[$s] // empty' "$STATE_OK_FILE" 2>/dev/null || true
+}
+
 # --- Plan State Management ---
 
 # Save execution plan. Atomic and checked: execute_plan re-reads this file,

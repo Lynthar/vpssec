@@ -629,14 +629,40 @@ _ssh_directive_test() {
 
 # Pass condition of the row named $1, asking sshd for the value.
 _ssh_directive_ok() {
-    local row stem directive default test expect
+    local row stem directive default test expect val alive=0
     for row in "${SSH_DIRECTIVE_CHECKS[@]}"; do
         IFS='|' read -r stem directive default test expect _ <<< "$row"
         [[ "$stem" == "$1" ]] || continue
-        _ssh_directive_test "$test" "$expect" "$(_ssh_get_config "$directive" "$default")"
+        val=$(_ssh_get_config "$directive" "$default")
+        _ssh_client_alive_on && alive=1
+        case "$(_ssh_keepalive_override "$stem" "$val" "$alive")" in
+            ssh.client_alive_disabled)    return 1 ;;
+            ssh.tcp_keepalive_sole_probe) return 0 ;;
+        esac
+        _ssh_directive_test "$test" "$expect" "$val"
         return
     done
     return 1
+}
+
+# sshd probes a silent client through the encrypted channel only while
+# ClientAliveInterval is above 0; ClientAliveCountMax counts those probes.
+_ssh_client_alive_on() {
+    local v
+    v=$(_ssh_get_config ClientAliveInterval 0)
+    [[ "$v" =~ ^[0-9]+$ ]] && (( 10#$v > 0 ))
+}
+
+# The id row $1 (value $2) emits in place of its own while that probe is off ($3 = 0):
+# CountMax counts nothing then, and TCPKeepAlive is all that reaps a dead session, so
+# advising it off as well would keep such sessions forever. Nothing otherwise.
+_ssh_keepalive_override() {
+    (( $3 )) && return 0
+    case "$1" in
+        client_alive)  echo ssh.client_alive_disabled ;;
+        tcp_keepalive) [[ "${2,,}" != yes ]] || echo ssh.tcp_keepalive_sole_probe ;;
+    esac
+    return 0
 }
 
 _ssh_x11_forwarding_disabled() {
@@ -646,11 +672,25 @@ _ssh_x11_forwarding_disabled() {
 # One pass over SSH_DIRECTIVE_CHECKS: the terminal shows the value only for
 # the numeric checks, where the number is the finding.
 _ssh_audit_directives() {
-    local row stem directive default test expect pass_id fail_id sugg fix val ok shown
+    local row stem directive default test expect pass_id fail_id sugg fix val ok shown alive=0
+    _ssh_client_alive_on && alive=1
     for row in "${SSH_DIRECTIVE_CHECKS[@]}"; do
         IFS='|' read -r stem directive default test expect pass_id fail_id sugg fix <<< "$row"
         print_item "$(i18n "ssh.check_${stem}")"
         val=$(_ssh_get_config "$directive" "$default")
+        case "$(_ssh_keepalive_override "$stem" "$val" "$alive")" in
+            ssh.client_alive_disabled)
+                check_emit "ssh.client_alive_disabled" low failed \
+                    desc="$(i18n 'ssh.client_alive_disabled_desc')" \
+                    suggestion="$(i18n 'ssh.client_alive_disabled_suggestion')"
+                print_severity "low" "$(i18n 'ssh.client_alive_disabled')"
+                continue ;;
+            ssh.tcp_keepalive_sole_probe)
+                check_emit "ssh.tcp_keepalive_sole_probe" low passed \
+                    desc="TCPKeepAlive=${val}, ClientAliveInterval=0"
+                print_ok "$(i18n 'ssh.tcp_keepalive_sole_probe')"
+                continue ;;
+        esac
         ok=0; shown=""
         [[ "$test" == '<=' ]] && shown=" ($val)"
         _ssh_directive_test "$test" "$expect" "$val" && ok=1

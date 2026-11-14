@@ -576,6 +576,25 @@ SH
     grep -q 'Undo for ufw.install: apt purge ufw' "$VPSSEC_LOGS/vpssec.log"
 }
 
+@test "install: ufw is not installed over iptables-persistent, which apt would remove for it" {
+    # Debian's ufw conflicts with iptables-persistent; -y used to remove it and
+    # netfilter-persistent, so the operator's saved rules stopped loading at boot.
+    i18n_load en_US
+    _vpssec_stub_script apt-get <<'SH'
+case "$*" in
+    "-s install ufw") printf '%s\n' 'Remv iptables-persistent [1.0.23]' \
+                          'Remv netfilter-persistent [1.0.23]' 'Inst ufw (0.36.2-9 Debian:13.7/stable [all])' ;;
+esac
+exit 0
+SH
+
+    run _ufw_fix_install
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"would remove iptables-persistent netfilter-persistent"* ]]
+    _vpssec_refute _vpssec_stub_called apt-get 'install -y'
+    _vpssec_refute grep -q 'Undo for ufw.install' "$VPSSEC_LOGS/vpssec.log"
+}
+
 @test "ufw_fix: an unknown fix id fails instead of silently doing nothing" {
     run ufw_fix "ufw.not_a_real_fix"
     [ "$status" -eq 1 ]

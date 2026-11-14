@@ -412,6 +412,31 @@ SH
     [[ "$output" != *"fail2ban-client -t"* ]]
 }
 
+@test "rollback: a session restored in full is marked so in the menu, in state and not in the session" {
+    # The menu listed it unchanged, first: picking 1 again to step back further
+    # rolled the same session back over and over.
+    _rollback_of 'restore /etc/ssh/sshd_config' 0
+    mkdir -p "$VPSSEC_BACKUPS/20260501_120000"
+    run _rollback_session_label 20260501_120000
+    [ "$output" = "20260501_120000 (1 changes)" ]
+
+    run _rollback_session 20260501_120000
+    [ "$status" -eq 0 ]
+    run _rollback_session_label 20260501_120000
+    [[ "$output" =~ ^"20260501_120000 (1 changes, rolled back "[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]
+    [ -z "$(ls -A "$VPSSEC_BACKUPS/20260501_120000")" ]
+}
+
+@test "rollback: a partial or failed restore is not marked as rolled back" {
+    local rc
+    for rc in 1 2; do
+        _rollback_of 'restore /etc/ssh/sshd_config' "$rc"
+        run _rollback_session 20260501_120000
+        [ "$status" -eq "$rc" ]
+        [ -z "$(state_rollback_time 20260501_120000)" ]
+    done
+}
+
 @test "a declined rollback exits 0 and restores nothing (deprecated: 1 at the next major)" {
     # docs/compatibility.md promises 0 here until the next MAJOR release; this
     # pins it so the change to 1 happens there, on purpose, not by accident.

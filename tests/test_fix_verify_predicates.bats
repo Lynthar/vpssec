@@ -222,8 +222,12 @@ SH
 
 # ---- kernel.harden_network / harden_kernel ----------------------------------
 
-# /proc/sys as a table the test fills: unset names read as unavailable.
+# /proc/sys as a table the test fills: unset names read as unavailable. The fixes also
+# read and may append to the sysctl.d files applied at boot: never the host's own.
 _sysctl_table() {
+    SYSCTL_D="$BATS_TEST_TMPDIR/sysctl.d"
+    VPSSEC_SYSCTL_CONF="$SYSCTL_D/99-vpssec-hardening.conf"
+    KERNEL_SYSCTL_BOOT_DIRS=()
     declare -gA SYSCTL=()
     _kernel_get_sysctl() { printf '%s' "${SYSCTL[$1]-}"; }
     _kernel_ip_forward_needed() { return 1; }

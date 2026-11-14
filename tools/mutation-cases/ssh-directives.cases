@@ -41,3 +41,24 @@ run_case "loop/shared-suggestion-always" 1 \
 run_case "loop/fix-dropped" 1 \
     '                fix="${fix/#-/}"' \
     '                fix=""'
+
+# ClientAliveInterval 0: CountMax counts nothing and TCPKeepAlive is the only probe left.
+run_case "keepalive/probe-state-ignored" 1 \
+    '    (( $3 )) && return 0' \
+    '    return 0'
+
+run_case "keepalive/probe-never-on" 1 \
+    '    [[ "$v" =~ ^[0-9]+$ ]] && (( 10#$v > 0 ))' \
+    '    false'
+
+run_case "keepalive/interval-read-as-octal" 1 \
+    '    [[ "$v" =~ ^[0-9]+$ ]] && (( 10#$v > 0 ))' \
+    '    [[ "$v" =~ ^[0-9]+$ ]] && (( v > 0 ))'
+
+run_case "keepalive/tcp-no-taken-for-sole-probe" 1 \
+    '        tcp_keepalive) [[ "${2,,}" != yes ]] || echo ssh.tcp_keepalive_sole_probe ;;' \
+    '        tcp_keepalive) echo ssh.tcp_keepalive_sole_probe ;;'
+
+run_case "keepalive/predicate-unaware" 1 \
+    '            ssh.client_alive_disabled)    return 1 ;;' \
+    '            ssh.client_alive_disabled)    ;;'

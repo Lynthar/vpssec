@@ -1168,8 +1168,7 @@ rollback_mode() {
         local -a backup_array=()
         while read -r ts; do
             backup_array+=("$ts")
-            local contents=$(backup_list_contents "$ts" | grep -c .) || contents=0
-            tty_say "  $i) $(i18n 'backup.session_entry' "ts=$ts" "count=$contents")"
+            tty_say "  $i) $(_rollback_session_label "$ts")"
             ((i++))
         done <<< "$backups"
 
@@ -1221,6 +1220,19 @@ rollback_mode() {
     return "$rc"
 }
 
+# The menu line for session $1: its change count, and when it was rolled back if it
+# was, so stepping back one session at a time does not pick the same one again.
+_rollback_session_label() {
+    local ts="$1" contents rolled
+    contents=$(backup_list_contents "$ts" | grep -c .) || contents=0
+    rolled=$(state_rollback_time "$ts")
+    if [[ -n "$rolled" ]]; then
+        i18n 'backup.session_entry_rolled_back' "ts=$ts" "count=$contents" "time=$rolled"
+    else
+        i18n 'backup.session_entry' "ts=$ts" "count=$contents"
+    fi
+}
+
 # Roll back one session: restore it, say which of the three outcomes it was,
 # and reload the daemons unless nothing came back. Returns backup_restore's
 # 0 / 1 / 2. `rollback` and the guide's failure menu both end here.
@@ -1240,6 +1252,7 @@ _rollback_session() {
 
     if (( restore_rc == 0 )); then
         print_ok "$(i18n 'backup.restored')"
+        state_record_rollback "$timestamp" || log_warn "rollback: could not record $timestamp as rolled back"
     else
         print_warn "$(i18n 'backup.restored_partial')"
     fi
@@ -1327,9 +1340,14 @@ status_mode() {
 
     # Backup info. vpssec never deletes a session, so their number and size
     # are shown here, where the operator decides what to remove.
-    local latest_backup=$(backup_get_latest)
+    local latest_backup=$(backup_get_latest) rolled
     if [[ -n "$latest_backup" ]]; then
-        print_msg "  $(i18n 'status.latest_backup' "time=$latest_backup")"
+        rolled=$(state_rollback_time "$latest_backup")
+        if [[ -n "$rolled" ]]; then
+            print_msg "  $(i18n 'status.latest_backup_rolled_back' "time=$latest_backup" "rolled=$rolled")"
+        else
+            print_msg "  $(i18n 'status.latest_backup' "time=$latest_backup")"
+        fi
         local count size
         count=$(backup_list | grep -c .) || count=0
         size=$(du -sh "$VPSSEC_BACKUPS" 2>/dev/null | cut -f1) || size="?"

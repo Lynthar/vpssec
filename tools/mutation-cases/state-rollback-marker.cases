@@ -1,0 +1,12 @@
+# Mutation cases: tests/test_backup_restore.bats against core/state.sh.
+# mutate-suite: core/state.sh tests/test_backup_restore.bats
+#
+# Only the rolled-back marker kept in ok.json; backup_restore's own cases are elsewhere.
+
+run_case "rollback-marker/not-stored" 1 \
+    '    if jq --arg s "$ts" --arg t "$timestamp" '"'"'.rolled_back[$s] = $t'"'"' \' \
+    '    if jq '"'"'.'"'"' \'
+
+run_case "rollback-marker/never-read" 1 \
+    '    jq -r --arg s "$1" '"'"'.rolled_back[$s] // empty'"'"' "$STATE_OK_FILE" 2>/dev/null || true' \
+    '    :'

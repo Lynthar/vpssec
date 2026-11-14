@@ -85,3 +85,13 @@ SH
     [[ "$output" == *"State is not readable as this user (it is root-owned by design). Run: sudo vpssec status"* ]]
     [[ "$output" != *"Last audit"* ]]
 }
+
+@test "status: a latest backup already rolled back says so and when" {
+    mkdir -p "$VPSSEC_BACKUPS/20260501_120000"
+    run status_mode
+    grep -qx '  Latest backup: 20260501_120000' <<<"$output"
+
+    state_record_rollback 20260501_120000
+    run status_mode
+    grep -qE '^  Latest backup: 20260501_120000 \(rolled back [0-9]{4}-[0-9]{2}-[0-9]{2}T' <<<"$output"
+}

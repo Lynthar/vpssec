@@ -47,8 +47,11 @@ setup() {
 }
 
 # Feed every directive its pass ($1=pass), fail ($1=fail) or default ($1=default) input.
+# pass and fail turn sshd's own probe on: with ClientAliveInterval 0, as by default, the
+# two keepalive rows answer differently (_expected_keepalive_off).
 _stub_all() {
     local row stem directive default expect pass_in fail_in rest
+    [[ "$1" == default ]] || SSH_STUB[ClientAliveInterval]=300
     for row in "${SSH_GOLD[@]}"; do
         IFS='|' read -r stem directive default expect pass_in fail_in rest <<< "$row"
         case "$1" in
@@ -57,6 +60,24 @@ _stub_all() {
             default) ;;
         esac
     done
+}
+
+# The record and lines for keepalive row $1 at value $2 while ClientAliveInterval is 0;
+# false for a row that then keeps its own verdict.
+_expected_keepalive_off() {
+    case "$1" in
+        client_alive)
+            EXPECTED_LINES+=("  • $(i18n ssh.check_client_alive)" "  ● $(i18n ssh.client_alive_disabled)")
+            EXPECTED_CHECKS+=("$(printf '%s\t' ssh.client_alive_disabled ssh low failed \
+                "$(i18n ssh.client_alive_disabled)" "$(i18n ssh.client_alive_disabled_desc)" \
+                "$(i18n ssh.client_alive_disabled_suggestion)")") ;;
+        tcp_keepalive)
+            [[ "${2,,}" == yes ]] || return 1
+            EXPECTED_LINES+=("  • $(i18n ssh.check_tcp_keepalive)" "✓ $(i18n ssh.tcp_keepalive_sole_probe)")
+            EXPECTED_CHECKS+=("$(printf '%s\t' ssh.tcp_keepalive_sole_probe ssh low passed \
+                "$(i18n ssh.tcp_keepalive_sole_probe)" "TCPKeepAlive=$2, ClientAliveInterval=0" "")") ;;
+        *) return 1 ;;
+    esac
 }
 
 # Expected checks.json rows (TSV) and terminal lines for the current stub,
@@ -69,6 +90,7 @@ _expected() {
     for row in "${SSH_GOLD[@]}"; do
         IFS='|' read -r stem directive default expect pass_in fail_in pass_id fail_id sugg fix pass_desc shown default_state <<< "$row"
         val="${SSH_STUB[$directive]-$default}"
+        [[ "${SSH_STUB[ClientAliveInterval]:-0}" == 0 ]] && _expected_keepalive_off "$stem" "$val" && continue
         case "$mode" in
             passed|failed) state="$mode" ;;
             default)       state="$default_state" ;;
@@ -121,10 +143,34 @@ _assert_same() {
     _assert_golden
 }
 
-@test "ssh directives: sshd's defaults pass six checks and fail six" {
+@test "ssh directives: sshd's defaults pass eight checks and fail four" {
+    # ClientAliveInterval is 0 by default: the probe being off is the finding, and
+    # TCPKeepAlive yes, the only liveness check left, passes.
     _stub_all default
     _expected default
     _assert_golden
+    [ "$(jq '[.[] | select(.status == "passed")] | length' "$STATE_CHECKS_FILE")" -eq 8 ]
+}
+
+@test "ssh directives: with ClientAliveInterval 0 and TCPKeepAlive no, the missing probe is the finding" {
+    # Every directive at its hardened value, the probe still off: CountMax 2 counts
+    # nothing, and TCPKeepAlive no has left nothing to reap a dead session.
+    _stub_all pass
+    SSH_STUB[ClientAliveInterval]=0
+    _expected passed
+    _assert_golden
+    [ "$(jq -r '.[] | select(.id | startswith("ssh.client_alive")) | .id' "$STATE_CHECKS_FILE")" = ssh.client_alive_disabled ]
+    [ "$(jq -r '.[] | select(.id | startswith("ssh.tcp_keepalive")) | .id' "$STATE_CHECKS_FILE")" = ssh.tcp_keepalive_disabled ]
+}
+
+@test "ssh directives: a non-numeric ClientAliveInterval counts as the probe being off" {
+    _stub_all fail
+    SSH_STUB[ClientAliveInterval]=abc
+    run _ssh_client_alive_on
+    [ "$status" -ne 0 ]
+    # 09 is not octal: read as a number with a leading 0, bash would refuse it.
+    SSH_STUB[ClientAliveInterval]=09
+    _ssh_client_alive_on
 }
 
 @test "ssh directives: a non-numeric ClientAliveCountMax or MaxSessions fails, never aborts" {
@@ -162,6 +208,7 @@ _assert_same() {
     # _ssh_directive_ok is what FIX_VERIFY asks after a fix; it must pass
     # exactly where the loop emits the pass id.
     local row stem directive pass_in fail_in rest
+    SSH_STUB[ClientAliveInterval]=300
     for row in "${SSH_GOLD[@]}"; do
         IFS='|' read -r stem directive _ _ pass_in fail_in rest <<< "$row"
         SSH_STUB[$directive]="$pass_in"
@@ -170,4 +217,14 @@ _assert_same() {
         _vpssec_refute _ssh_directive_ok "$stem"
     done
     _vpssec_refute _ssh_directive_ok no_such_row
+}
+
+@test "ssh directives: with ClientAliveInterval 0 the predicate follows the keepalive verdicts" {
+    SSH_STUB[ClientAliveInterval]=0
+    SSH_STUB[ClientAliveCountMax]=2
+    _vpssec_refute _ssh_directive_ok client_alive
+    SSH_STUB[TCPKeepAlive]=yes
+    _ssh_directive_ok tcp_keepalive
+    SSH_STUB[TCPKeepAlive]=no
+    _ssh_directive_ok tcp_keepalive
 }

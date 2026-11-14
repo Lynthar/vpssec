@@ -29,3 +29,16 @@ run_case "apt-install/reason-dropped" 1 \
 run_case "apt-install/not-logged" 1 \
     "    log_info \"apt-get install -y \$* exited \$rc:\"\$'\n'\"\$out\"" \
     '    :'
+
+# A package another one conflicts with is never removed to make room for an install.
+run_case "apt-install/removal-unchecked" 1 \
+    '    if [[ -n "$removed" ]]; then' \
+    '    if false; then'
+
+run_case "apt-install/simulated-in-host-locale" 1 \
+    '    removed=$(LC_ALL=C apt-get -s install "$@" </dev/null 2>/dev/null \' \
+    '    removed=$(apt-get -s install "$@" </dev/null 2>/dev/null \'
+
+run_case "apt-install/removals-allowed" 1 \
+    '    out=$(DEBIAN_FRONTEND=noninteractive apt-get --no-remove \' \
+    '    out=$(DEBIAN_FRONTEND=noninteractive apt-get \'

@@ -381,3 +381,34 @@ run_case "rp-all/never-judged" 1 \
 run_case "rp-all/no-interface-moot" 1 \
     '    (( ! seen ))' \
     '    false'
+
+# A sysctl.d file that sorts after the drop-in: systemd-sysctl applies it later at boot.
+run_case "dropin-align/network-not-aligned" 1 \
+    '        _kernel_dropin_align "${written[@]}" || ((persist_failed++)) || true' \
+    '        :'
+
+run_case "dropin-align/kernel-not-aligned" 2 \
+    '        _kernel_dropin_align "${written[@]}" || ((persist_failed++)) || true' \
+    '        :'
+
+run_case "dropin-align/link-followed" 1 \
+    '        if [[ "$file" == "$SYSCTL_D"/* && -f "$file" && ! -L "$file" ]]; then' \
+    '        if [[ "$file" == "$SYSCTL_D"/* && -f "$file" ]]; then'
+
+run_case "dropin-align/package-file-edited" 1 \
+    '        if [[ "$file" == "$SYSCTL_D"/* && -f "$file" && ! -L "$file" ]]; then' \
+    '        if [[ -f "$file" && ! -L "$file" ]]; then'
+
+run_case "dropin-align/not-backed-up" 1 \
+    '        backup_file "$file" >/dev/null || return 1' \
+    '        :'
+
+run_case "dropin-align/earlier-file-edited" 1 \
+    '        _kernel_sorts_after "${file##*/}" "${VPSSEC_SYSCTL_CONF##*/}" || continue' \
+    '        :'
+
+# Occurrence 2: _kernel_ufw_align above carries the same line. Killed only by a later file
+# holding a different hardened value: an equal one leaves the drop-in as the value's source.
+run_case "dropin-align/agreeing-file-edited" 2 \
+    '        _kernel_value_meets "$value" "${spec[$param]}" && continue' \
+    '        :'

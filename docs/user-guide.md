@@ -465,7 +465,11 @@ sysctl kernel.randomize_va_space
 
 启用了 ufw 时还有一层：ufw 每次启动和重载都会在 sysctl.d 之后套用 `/etc/default/ufw` 里
 `IPT_SYSCTL` 指向的文件（默认 `/etc/ufw/sysctl.conf`），它出厂写着 `log_martians=0`。修复会在
-这个文件末尾追加加固值（回滚时还原），否则下一次 `ufw reload` 就把它改回去。
+这个文件末尾追加加固值（回滚时还原），否则下一次 `ufw reload` 就把它改回去。sysctl.d 本身也
+按文件名排先后：有的厂商镜像在 `/etc/sysctl.d/` 下放一个不带数字前缀的 `sysctl.conf`，它排在
+`99-vpssec-hardening.conf` 之后，开机时把 `rp_filter` 又设回 0。修复写完自己的文件后按开机顺序
+推算一遍，`/etc/sysctl.d/` 里排在后面、又把某个键改弱的普通文件，同样在末尾追加加固值（回滚时
+还原）；别的目录里的文件（软件包会在升级时覆盖它）和软链只点名报出，不去改。
 
 **自动修复**: `kernel.harden_network`（需确认；可能影响容器网络）。IPv6 的
 `accept_ra`、`accept_redirects` 归下一节的 IPv6 检测与 `kernel.harden_ipv6`
@@ -816,7 +820,9 @@ iptables 都算；只有 fail2ban、Tailscale 自己的链，或者「默认放�
 **为什么重要**: 防火墙是网络安全的第一道防线
 
 **自动修复**: `ufw.install`（安全，仅 Debian / Ubuntu）；`ufw.enable`（高风险）。
-启用之前它先给 sshd 监听的**每一个**端口各加一条放行规则，再给你当前的来源 IP 加一条
+装 UFW 要是得先卸掉别的包（Debian 的 ufw 与 `iptables-persistent` 冲突，后者连同开机加载已存规则
+的 `netfilter-persistent` 会被一并卸掉），`ufw.install` 什么都不装，只报出会被卸掉的包；所有装包的
+修复都这样，vpssec 从不替你卸软件包。`ufw.enable` 启用之前先给 sshd 监听的**每一个**端口各加一条放行规则，再给你当前的来源 IP 加一条
 救援规则，列出将要生效的规则，等你手打 `yes` 才启用。UFW 已启用、但有 SSH 端口没被放行时
 （`ufw.no_ssh_rule`），`ufw.allow_ssh`（安全）只补缺的那几个端口
 
@@ -1388,7 +1394,7 @@ vpssec [mode] [options]
 |---|---|
 | `audit` | 只读审计（默认模式） |
 | `guide` | 交互式加固向导（会修改系统） |
-| `rollback [TS]` | 回滚到指定时间戳的备份；省略 `TS` 进入交互选择 |
+| `rollback [TS]` | 回滚到指定时间戳的备份；省略 `TS` 进入交互选择，整批回滚过的会话在列表里标着回滚时间 |
 | `status` | 显示版本与有没有新版本；以 root 运行时还显示上次审计的时间与得分（有模块没跑完会注明）、上次应用修复的时间、备份会话数与位置——状态目录只归 root 可读 |
 | `help [MODULE]` | 列出所有模块和 `fix_id`；带模块名时显示该模块的详情（不需要 root，不会改系统） |
 

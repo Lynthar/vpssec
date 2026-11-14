@@ -71,3 +71,16 @@ run_case "rollback-exit/rmdir-not-previewed" 1 \
 run_case "rollback-exit/no-manifest-not-previewed" 1 \
     '    for verb in restore delete rmdir missing nomanifest; do' \
     '    for verb in restore delete rmdir missing; do'
+
+# A session restored in full is marked, so the menu stops offering it as untouched.
+run_case "rollback-marker/not-recorded" 1 \
+    '        state_record_rollback "$timestamp" || log_warn "rollback: could not record $timestamp as rolled back"' \
+    '        :'
+
+run_case "rollback-marker/label-ignores-marker" 1 \
+    '    if [[ -n "$rolled" ]]; then' \
+    '    if false; then'
+
+run_case "rollback-marker/partial-recorded" 1 \
+    '    if (( restore_rc == 0 )); then' \
+    '    if (( restore_rc != 1 )); then'

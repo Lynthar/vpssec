@@ -1449,6 +1449,7 @@ _kernel_fix_network_params() {
         (( runtime_failed + persist_failed == 0 )) || break
     done
     if (( ${#written[@]} > 0 )); then
+        _kernel_dropin_align "${written[@]}" || ((persist_failed++)) || true
         _kernel_ufw_align "${written[@]}" || ((persist_failed++)) || true
     fi
 
@@ -1489,6 +1490,50 @@ _kernel_ufw_align() {
     write_file_atomic "$file" "$content"$'\n\n'"# vpssec: overrides the values above"$'\n'"$lines"
 }
 
+# True when file name $1 sorts after $2 in C collation, the order systemd-sysctl applies them.
+_kernel_sorts_after() {
+    local LC_ALL=C
+    [[ "$1" > "$2" ]]
+}
+
+# systemd-sysctl applies sysctl.d by file name, so a file sorting after the drop-in (a
+# vendor's sysctl.d/sysctl.conf) undoes the fix at boot. Args as _kernel_ufw_align; a
+# regular file in SYSCTL_D gets overriding lines at its end, any other is only named.
+_kernel_dropin_align() {
+    local entry param value expected where file content
+    local -a files=()
+    local -A wrote=() spec=() lines=()
+    for entry in "$@"; do
+        read -r param value expected <<<"$entry"
+        wrote[$param]="$value"
+        spec[$param]="$expected"
+    done
+    while IFS= read -r file; do
+        [[ -r "$file" ]] && files+=("$file")
+    done < <(_kernel_boot_sysctl_files)
+    (( ${#files[@]} > 0 )) || return 0
+    while IFS=$'\t' read -r param value where; do
+        _kernel_value_meets "$value" "${spec[$param]}" && continue
+        file="${where%:*}"
+        # One sorting first loses to the drop-in, unless writing that failed, which is
+        # counted already: never edit it.
+        _kernel_sorts_after "${file##*/}" "${VPSSEC_SYSCTL_CONF##*/}" || continue
+        if [[ "$file" == "$SYSCTL_D"/* && -f "$file" && ! -L "$file" ]]; then
+            lines[$file]+="$param = ${wrote[$param]}"$'\n'
+        else
+            print_warn "$(i18n 'kernel.sysctl_boot_kept_weak' "param=$param" "value=$value" "where=$where")"
+        fi
+    done < <(printf '%s\n' "${!wrote[@]}" | LC_ALL=C sort \
+                 | _kernel_boot_values "$(_kernel_sysctl_globs)" "${files[@]}")
+
+    for file in "${!lines[@]}"; do
+        content=$(cat "$file") || return 1
+        backup_file "$file" >/dev/null || return 1
+        print_info "$(i18n 'kernel.sysctl_d_aligned' "file=$file")"
+        write_file_atomic "$file" "$content"$'\n\n'"# vpssec: overrides the values above"$'\n'"${lines[$file]}" || return 1
+    done
+}
+
 # For ufw.enable, which applies that file at once and at every boot: hardened keys held
 # there too. ufw's stock file is nobody's choice, so every key sysctl.d leaves hardened;
 # an edited one, only those this tool persisted, so an operator's ip_forward=1 stays.
@@ -1520,8 +1565,11 @@ _kernel_fix_kernel_params() {
     print_info "$(i18n 'kernel.hardening_kernel')"
 
     local params_to_set=() kind param expected
+    local -A want=()
     while read -r kind _ param expected _; do
-        [[ "$kind" == "bad" ]] && params_to_set+=("$param=$(_kernel_param_target "$expected")")
+        [[ "$kind" == "bad" ]] || continue
+        params_to_set+=("$param=$(_kernel_param_target "$expected")")
+        want[$param]="$expected"
     done <<<"$(_kernel_param_scan "$KERNEL_SYS_SCOPE")"
 
     if [[ ${#params_to_set[@]} -eq 0 ]]; then
@@ -1532,7 +1580,7 @@ _kernel_fix_kernel_params() {
     # Apply and persist — same counted pattern (and rationale) as
     # _kernel_fix_network_params above.
     local applied=0 runtime_failed=0 persist_failed=0 setting value old rc
-    local -a undo=()
+    local -a undo=() written=()
     for setting in "${params_to_set[@]}"; do
         param="${setting%%=*}"
         value="${setting#*=}"
@@ -1544,10 +1592,14 @@ _kernel_fix_kernel_params() {
             1) ((runtime_failed++)) || true ;;
             *) ((persist_failed++)) || true ;;
         esac
+        (( rc != 1 )) && written+=("$param $value ${want[$param]}")
         if (( rc != 1 )) && [[ -n "$old" ]]; then
             undo+=("$param=$old")
         fi
     done
+    if (( ${#written[@]} > 0 )); then
+        _kernel_dropin_align "${written[@]}" || ((persist_failed++)) || true
+    fi
     record_undo kernel.harden_kernel "$(_kernel_undo_cmd "${undo[@]}")"
 
     _kernel_fix_failed "$runtime_failed" "$persist_failed" && return 1
