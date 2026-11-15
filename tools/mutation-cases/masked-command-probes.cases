@@ -1,0 +1,8 @@
+# Mutation cases: tests/test_masked_command_probes.bats against modules/timezone.sh.
+# mutate-suite: modules/timezone.sh tests/test_masked_command_probes.bats
+#
+# A probe of a command the timezone tests make absent goes back to command -v.
+
+run_case "probe/command-v" 1 \
+    '    if check_command timedatectl; then' \
+    '    if command -v timedatectl &>/dev/null; then'

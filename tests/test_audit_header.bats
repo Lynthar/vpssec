@@ -32,9 +32,11 @@ _header_modules() { printf ',%s,' "$(sed -n 's/^Modules: //p' <<<"$output")"; }
     [ "$status" -eq 0 ]
     local mods m
     mods=$(_header_modules)
-    for m in ssh preflight cloud timezone; do
+    for m in ssh preflight timezone; do
         [[ "$mods" == *",$m,"* ]]
     done
+    # The provider is detected in core; the cloud module runs only when asked for.
+    [[ "$mods" != *",cloud,"* ]]
     [[ "$mods" != *",users,"* ]]
 }
 

@@ -904,19 +904,19 @@ ssh_fix() {
             _ssh_fix_disable_root_login
             ;;
         ssh.enable_pubkey)
-            _ssh_fix_enable_pubkey
+            _ssh_fix_directive PubkeyAuthentication yes
             ;;
         ssh.disable_empty_password)
-            _ssh_fix_disable_empty_password
+            _ssh_fix_directive PermitEmptyPasswords no
             ;;
         ssh.set_max_auth_tries)
-            _ssh_fix_set_max_auth_tries
+            _ssh_fix_directive MaxAuthTries 4
             ;;
         ssh.set_login_grace_time)
-            _ssh_fix_set_login_grace_time
+            _ssh_fix_directive LoginGraceTime 60
             ;;
         ssh.disable_x11_forwarding)
-            _ssh_fix_disable_x11_forwarding
+            _ssh_fix_directive X11Forwarding no
             ;;
         ssh.harden_algorithms)
             _ssh_fix_harden_algorithms
@@ -1289,6 +1289,26 @@ _ssh_global_value() {
     awk -v k="${1,,}" 'tolower($1)==k{sub(/^[^ ]+ /, ""); print; exit}' <<<"$dump"
 }
 
+# Write the hardening drop-in with each directive matching ERE $1 replaced by
+# the lines $2.... An unreadable drop-in fails in the writer, which reads it for
+# its undo before writing anything.
+_ssh_dropin_replace() {
+    local names="$1" kept="" content
+    shift
+    if [[ -f "$SSH_HARDENING_DROPIN" ]]; then
+        kept=$(grep -v '^#' "$SSH_HARDENING_DROPIN" | grep -ivE "^($names)") || true
+    fi
+    content=$(printf '%s\n' "$@")
+    [[ -n "$kept" ]] && content="$kept"$'\n'"$content"
+    _ssh_write_hardening_config "$content"
+}
+
+# Set directive $1 to $2; the reload then requires sshd -T to report that value.
+_ssh_fix_directive() {
+    _ssh_dropin_replace "$1" "$1 $2" || return 1
+    _ssh_reload_safe "$1" "$2"
+}
+
 # Write SSH hardening config
 _ssh_write_hardening_config() {
     local content="$1"
@@ -1464,20 +1484,7 @@ _ssh_fix_disable_password_auth() {
         return 1
     fi
 
-    # Read existing hardening config
-    local existing=""
-    if [[ -f "$SSH_HARDENING_DROPIN" ]]; then
-        existing=$(grep -v "^#" "$SSH_HARDENING_DROPIN" | grep -iv "^PasswordAuthentication") || true
-    fi
-
-    # Write config
-    local content="PasswordAuthentication no"
-    if [[ -n "$existing" ]]; then
-        content="$existing
-$content"
-    fi
-
-    if _ssh_write_hardening_config "$content"; then
+    if _ssh_dropin_replace PasswordAuthentication "PasswordAuthentication no"; then
         _ssh_reload_safe PasswordAuthentication no
         local result=$?
         _ssh_close_rescue_port
@@ -1529,20 +1536,7 @@ _ssh_fix_disable_root_login() {
         return 1
     fi
 
-    # Read existing hardening config
-    local existing=""
-    if [[ -f "$SSH_HARDENING_DROPIN" ]]; then
-        existing=$(grep -v "^#" "$SSH_HARDENING_DROPIN" | grep -iv "^PermitRootLogin") || true
-    fi
-
-    # Write config
-    local content="PermitRootLogin no"
-    if [[ -n "$existing" ]]; then
-        content="$existing
-$content"
-    fi
-
-    if _ssh_write_hardening_config "$content"; then
+    if _ssh_dropin_replace PermitRootLogin "PermitRootLogin no"; then
         _ssh_reload_safe PermitRootLogin no
         local result=$?
         _ssh_close_rescue_port
@@ -1554,138 +1548,15 @@ $content"
     fi
 }
 
-_ssh_fix_enable_pubkey() {
-    # Read existing hardening config
-    local existing=""
-    if [[ -f "$SSH_HARDENING_DROPIN" ]]; then
-        existing=$(grep -v "^#" "$SSH_HARDENING_DROPIN" | grep -iv "^PubkeyAuthentication") || true
-    fi
-
-    # Write config
-    local content="PubkeyAuthentication yes"
-    if [[ -n "$existing" ]]; then
-        content="$existing
-$content"
-    fi
-
-    if _ssh_write_hardening_config "$content"; then
-        _ssh_reload_safe PubkeyAuthentication yes
-    else
-        return 1
-    fi
-}
-
-_ssh_fix_disable_empty_password() {
-    # Read existing hardening config
-    local existing=""
-    if [[ -f "$SSH_HARDENING_DROPIN" ]]; then
-        existing=$(grep -v "^#" "$SSH_HARDENING_DROPIN" | grep -iv "^PermitEmptyPasswords") || true
-    fi
-
-    # Write config
-    local content="PermitEmptyPasswords no"
-    if [[ -n "$existing" ]]; then
-        content="$existing
-$content"
-    fi
-
-    if _ssh_write_hardening_config "$content"; then
-        _ssh_reload_safe PermitEmptyPasswords no
-    else
-        return 1
-    fi
-}
-
-_ssh_fix_set_max_auth_tries() {
-    # Read existing hardening config
-    local existing=""
-    if [[ -f "$SSH_HARDENING_DROPIN" ]]; then
-        existing=$(grep -v "^#" "$SSH_HARDENING_DROPIN" | grep -iv "^MaxAuthTries") || true
-    fi
-
-    # Write config
-    local content="MaxAuthTries 4"
-    if [[ -n "$existing" ]]; then
-        content="$existing
-$content"
-    fi
-
-    if _ssh_write_hardening_config "$content"; then
-        _ssh_reload_safe MaxAuthTries 4
-    else
-        return 1
-    fi
-}
-
-_ssh_fix_set_login_grace_time() {
-    # Read existing hardening config
-    local existing=""
-    if [[ -f "$SSH_HARDENING_DROPIN" ]]; then
-        existing=$(grep -v "^#" "$SSH_HARDENING_DROPIN" | grep -iv "^LoginGraceTime") || true
-    fi
-
-    # Write config
-    local content="LoginGraceTime 60"
-    if [[ -n "$existing" ]]; then
-        content="$existing
-$content"
-    fi
-
-    if _ssh_write_hardening_config "$content"; then
-        _ssh_reload_safe LoginGraceTime 60
-    else
-        return 1
-    fi
-}
-
-_ssh_fix_disable_x11_forwarding() {
-    # Read existing hardening config
-    local existing=""
-    if [[ -f "$SSH_HARDENING_DROPIN" ]]; then
-        existing=$(grep -v "^#" "$SSH_HARDENING_DROPIN" | grep -iv "^X11Forwarding") || true
-    fi
-
-    # Write config
-    local content="X11Forwarding no"
-    if [[ -n "$existing" ]]; then
-        content="$existing
-$content"
-    fi
-
-    if _ssh_write_hardening_config "$content"; then
-        _ssh_reload_safe X11Forwarding no
-    else
-        return 1
-    fi
-}
-
 _ssh_fix_harden_algorithms() {
     print_info "$(i18n 'ssh.hardening_algorithms')"
 
-    # Read existing hardening config
-    local existing=""
-    if [[ -f "$SSH_HARDENING_DROPIN" ]]; then
-        existing=$(grep -v "^#" "$SSH_HARDENING_DROPIN" | \
-            grep -iv "^Ciphers" | \
-            grep -iv "^MACs" | \
-            grep -iv "^KexAlgorithms") || true
-    fi
-
     # Removed from the defaults rather than a fixed list: the distro's own
     # set, its post-quantum hybrid KEX included, stays (OpenSSH 7.5+ syntax).
-    local content="Ciphers -3des-cbc,arcfour*,blowfish-cbc,cast128-cbc
-MACs -hmac-md5*,hmac-sha1*
-KexAlgorithms -diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1"
-
-    if [[ -n "$existing" ]]; then
-        content="$existing
-$content"
-    fi
-
-    if _ssh_write_hardening_config "$content"; then
-        _ssh_reload_safe
-        return $?
-    else
-        return 1
-    fi
+    _ssh_dropin_replace 'Ciphers|MACs|KexAlgorithms' \
+        "Ciphers -3des-cbc,arcfour*,blowfish-cbc,cast128-cbc" \
+        "MACs -hmac-md5*,hmac-sha1*" \
+        "KexAlgorithms -diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1" \
+        || return 1
+    _ssh_reload_safe
 }

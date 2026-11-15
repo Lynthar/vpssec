@@ -54,6 +54,20 @@ declare -ga FS_SUID_WHITELIST=(
     "/usr/bin/ntfs-3g"
 )
 
+# Known legitimate SGID binaries (whitelist)
+declare -ga FS_SGID_WHITELIST=(
+    "/usr/bin/wall"
+    "/usr/bin/write"
+    "/usr/bin/ssh-agent"
+    "/usr/bin/expiry"
+    "/usr/bin/chage"
+    "/usr/bin/crontab"
+    "/usr/sbin/unix_chkpwd"
+    "/usr/sbin/pam_extrausers_chkpwd"
+    "/usr/lib/*/utempter/utempter"
+    "/usr/bin/groupmems"
+)
+
 # Sensitive files and their expected modes. The backup-shadow files
 # (/etc/shadow-, /etc/gshadow-) are here on purpose: they hold the same
 # hashes as the originals and are a classic blind spot.
@@ -197,182 +211,71 @@ _fs_is_whitelisted() {
     return 1
 }
 
-# Find non-whitelisted SUID files. -xdev handles other filesystems; the
-# prune list handles container-image storage on the root fs, whose overlay
-# diffs ship legitimate SUID binaries.
+# Walk / for the find predicates $3..., under the shared prunes, and print up to
+# FS_MAX_REPORT_ITEMS paths that function $2 (or "" for none) does not exempt.
+# $1 labels the walk for _fs_run_find. Returns 1 when the walk was cut short.
+_fs_walk() {
+    local label="$1" exempt="$2" path count=0 cut=0
+    local -a prune_args=() results=()
+    shift 2
+    _fs_build_prune_args prune_args
+
+    while IFS= read -r -d '' path; do
+        [[ "$path" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }
+        [[ -n "$exempt" ]] && "$exempt" "$path" && continue
+        results+=("$(_fs_display_path "$path")")
+        (( ++count < FS_MAX_REPORT_ITEMS )) || break
+    done < <(_fs_run_find "$label" find / -xdev "${prune_args[@]}" "$@" -print0 2>/dev/null)
+
+    printf '%s\n' "${results[@]}"
+    return "$cut"
+}
+
+# SGID binaries that ship as such. A package-owned one is exempt UNLESS the
+# manager can prove its mode was tampered; dpkg cannot, so on Debian the
+# explicit list is the guard.
+_fs_sgid_exempt() {
+    local pattern
+    for pattern in "${FS_SGID_WHITELIST[@]}"; do
+        _fs_path_glob "$1" "$pattern" && return 0
+    done
+    # Distro-specific SGID paths (RHEL/Arch) from core/distro.sh
+    while IFS= read -r pattern; do
+        [[ -n "$pattern" ]] && _fs_path_glob "$1" "$pattern" && return 0
+    done < <(distro_sgid_whitelist)
+    file_owned_by_package "$1" && ! _fs_pkg_mode_tampered "$1"
+}
+
+# Non-whitelisted SUID files. -xdev handles other filesystems; the prune list
+# handles container-image storage on the root fs, whose overlay diffs ship
+# legitimate SUID binaries.
 _fs_find_suid_files() {
-    local count=0 cut=0
-    local results=()
-
-    local prune_args=()
-    _fs_build_prune_args prune_args
-
-    while IFS= read -r -d '' file; do
-        [[ "$file" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }
-        if ! _fs_is_whitelisted "$file"; then
-            results+=("$(_fs_display_path "$file")")
-            ((count++)) || true
-            # Limit output
-            if ((count >= FS_MAX_REPORT_ITEMS)); then
-                break
-            fi
-        fi
-    done < <(_fs_run_find "suid" \
-        find / -xdev "${prune_args[@]}" \
-        -type f -perm -4000 -print0 2>/dev/null)
-
-    printf '%s\n' "${results[@]}"
-    return "$cut"
+    _fs_walk suid _fs_is_whitelisted -type f -perm -4000
 }
 
-# Find SGID files (excluding common ones)
 _fs_find_sgid_files() {
-    local count=0 cut=0
-    local results=()
-    local sgid_whitelist=(
-        "/usr/bin/wall"
-        "/usr/bin/write"
-        "/usr/bin/ssh-agent"
-        "/usr/bin/expiry"
-        "/usr/bin/chage"
-        "/usr/bin/crontab"
-        "/usr/sbin/unix_chkpwd"
-        "/usr/sbin/pam_extrausers_chkpwd"
-        "/usr/lib/*/utempter/utempter"
-        "/usr/bin/groupmems"
-    )
-
-    local prune_args=()
-    _fs_build_prune_args prune_args
-
-    while IFS= read -r -d '' file; do
-        [[ "$file" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }
-        local skip=0
-        for pattern in "${sgid_whitelist[@]}"; do
-            _fs_path_glob "$file" "$pattern" && { skip=1; break; }
-        done
-
-        # Distro-specific SGID paths (RHEL/Arch) from core/distro.sh
-        if (( skip == 0 )); then
-            while IFS= read -r pattern; do
-                [[ -n "$pattern" ]] && _fs_path_glob "$file" "$pattern" && { skip=1; break; }
-            done < <(distro_sgid_whitelist)
-        fi
-
-        # Same rule as SUID: exempt a package-owned SGID binary UNLESS the
-        # manager can prove the mode was tampered. dpkg cannot, so the
-        # explicit whitelist guards Debian.
-        if (( skip == 0 )) && file_owned_by_package "$file" \
-           && ! _fs_pkg_mode_tampered "$file"; then
-            skip=1
-        fi
-
-        if ((skip == 0)); then
-            results+=("$(_fs_display_path "$file")")
-            ((count++)) || true
-            if ((count >= FS_MAX_REPORT_ITEMS)); then
-                break
-            fi
-        fi
-    done < <(_fs_run_find "sgid" \
-        find / -xdev "${prune_args[@]}" \
-        -type f -perm -2000 -print0 2>/dev/null)
-
-    printf '%s\n' "${results[@]}"
-    return "$cut"
+    _fs_walk sgid _fs_sgid_exempt -type f -perm -2000
 }
 
-# Find world-writable files, excluding volatile mounts AND container
-# storage — without the latter, image-internal files are flagged as host
-# findings on any Docker host.
+# World-writable files. The prunes keep container storage out: without them,
+# image-internal files are flagged as host findings on any Docker host.
 _fs_find_world_writable() {
-    local count=0 cut=0
-    local results=()
-
-    local prune_args=()
-    _fs_build_prune_args prune_args
-
-    while IFS= read -r -d '' file; do
-        [[ "$file" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }
-        results+=("$(_fs_display_path "$file")")
-        ((count++)) || true
-        if ((count >= FS_MAX_REPORT_ITEMS)); then
-            break
-        fi
-    done < <(_fs_run_find "world-writable" \
-        find / -xdev "${prune_args[@]}" \
-        -type f -perm -0002 \
-        ! -path "/tmp/*" \
-        ! -path "/var/tmp/*" \
-        ! -path "/dev/*" \
-        ! -path "/proc/*" \
-        ! -path "/sys/*" \
-        ! -path "/run/*" \
-        -print0 2>/dev/null)
-
-    printf '%s\n' "${results[@]}"
-    return "$cut"
+    _fs_walk world-writable "" -type f -perm -0002 \
+        ! -path "/tmp/*" ! -path "/var/tmp/*" ! -path "/dev/*" \
+        ! -path "/proc/*" ! -path "/sys/*" ! -path "/run/*"
 }
 
-# Find world-writable directories without sticky bit. Same prune
-# fix as world-writable files.
+# World-writable directories without the sticky bit.
 _fs_find_world_writable_dirs() {
-    local count=0 cut=0
-    local results=()
-
-    local prune_args=()
-    _fs_build_prune_args prune_args
-
-    while IFS= read -r -d '' dir; do
-        [[ "$dir" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }
-        results+=("$(_fs_display_path "$dir")")
-        ((count++)) || true
-        if ((count >= FS_MAX_REPORT_ITEMS)); then
-            break
-        fi
-    done < <(_fs_run_find "world-writable-dirs" \
-        find / -xdev "${prune_args[@]}" \
-        -type d -perm -0002 ! -perm -1000 \
-        ! -path "/tmp" \
-        ! -path "/tmp/*" \
-        ! -path "/var/tmp" \
-        ! -path "/var/tmp/*" \
-        ! -path "/dev/*" \
-        ! -path "/proc/*" \
-        ! -path "/sys/*" \
-        ! -path "/run/*" \
-        -print0 2>/dev/null)
-
-    printf '%s\n' "${results[@]}"
-    return "$cut"
+    _fs_walk world-writable-dirs "" -type d -perm -0002 ! -perm -1000 \
+        ! -path "/tmp" ! -path "/tmp/*" ! -path "/var/tmp" ! -path "/var/tmp/*" \
+        ! -path "/dev/*" ! -path "/proc/*" ! -path "/sys/*" ! -path "/run/*"
 }
 
-# Find files with no owner. Same container-prune fix: a host that
-# pulls images often accumulates orphan-uid files inside Docker
-# overlays that aren't host-level orphans.
+# Files with no owner. A host that pulls images accumulates orphan-uid files
+# inside Docker overlays, which the prunes keep out.
 _fs_find_no_owner() {
-    local count=0 cut=0
-    local results=()
-
-    local prune_args=()
-    _fs_build_prune_args prune_args
-
-    while IFS= read -r -d '' file; do
-        [[ "$file" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }
-        results+=("$(_fs_display_path "$file")")
-        ((count++)) || true
-        if ((count >= FS_MAX_REPORT_ITEMS)); then
-            break
-        fi
-    done < <(_fs_run_find "no-owner" \
-        find / -xdev "${prune_args[@]}" \
-        \( -nouser -o -nogroup \) \
-        ! -path "/proc/*" \
-        ! -path "/sys/*" \
-        -print0 2>/dev/null)
-
-    printf '%s\n' "${results[@]}"
-    return "$cut"
+    _fs_walk no-owner "" \( -nouser -o -nogroup \) ! -path "/proc/*" ! -path "/sys/*"
 }
 
 # True when group $2 gets access bits from mode $3 (a number) on sensitive file

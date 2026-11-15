@@ -27,15 +27,14 @@ run_case "live-restore/daemon-not-asked-first" 1 \
 # The fallback exists for an unreachable daemon only. Removing it makes a
 # stopped daemon indistinguishable from an unconfigured host.
 run_case "live-restore/no-fallback-when-unreachable" 1 \
-    '        jq -e '"'"'.["live-restore"] == true'"'"' "$DOCKER_DAEMON_JSON" &>/dev/null' \
-    '        return 1'
+    '    _docker_configured_setting live-restore true' \
+    '    return 1'
 
-# The fallback reads the file only when there is one; inverting the gate makes
+# The fallback reads daemon.json only when there is one; inverting the gate makes
 # a stopped daemon with a configured daemon.json report unconfigured.
-# Occurrence 1 — the same line opens the writer's update branch further down.
-run_case "live-restore/fallback-file-gate-inverted" 1 \
-    '    if [[ -f "$DOCKER_DAEMON_JSON" ]]; then' \
-    '    if [[ ! -f "$DOCKER_DAEMON_JSON" ]]; then'
+run_case "configured/file-gate-inverted" 1 \
+    '    [[ -f "$DOCKER_DAEMON_JSON" ]] && \' \
+    '    [[ ! -f "$DOCKER_DAEMON_JSON" ]] && \'
 
 # Case folding: `docker info` has printed capitalised booleans in the past,
 # and the audit must not start reporting a configured host as unconfigured.
@@ -98,12 +97,12 @@ run_case "fix/live-restore-restarts" 1 \
     '        if systemctl reload docker 2>/dev/null; then' \
     '        if systemctl restart docker 2>/dev/null; then'
 
-# Occurrences 5 and 6 of the 8-space `return 1`: a failed write, a failed reload.
-run_case "fix/write-failure-swallowed" 5 \
+# Occurrences 4 and 5 of the 8-space `return 1`: a failed write, a failed reload.
+run_case "fix/write-failure-swallowed" 4 \
     '        return 1' \
     '        return 0'
 
-run_case "fix/reload-failure-swallowed" 6 \
+run_case "fix/reload-failure-swallowed" 5 \
     '        return 1' \
     '        return 0'
 
@@ -166,3 +165,9 @@ run_case "writer/existing-file-not-backed-up" 1 \
 run_case "rollback/backup-failure-swallowed" 1 \
     '    backup_file "$DOCKER_DAEMON_JSON" >/dev/null || return 1' \
     '    backup_file "$DOCKER_DAEMON_JSON" >/dev/null 2>&1 || true'
+
+# A stopped daemon's live-restore read from daemon.json alone: --live-restore on
+# dockerd's command line goes unseen.
+run_case "live-restore/flag-unseen" 1 \
+    '    _docker_configured_setting live-restore true' \
+    "    jq -e '.[\"live-restore\"] == true' \"\$DOCKER_DAEMON_JSON\" &>/dev/null"

@@ -148,7 +148,7 @@ _fail_writes_to() {
 
     run report_generate_json "$VPSSEC_REPORTS/summary.json"
     [ "$status" -eq 0 ]
-    [ "$(jq -r '.meta.modules' "$VPSSEC_REPORTS/summary.json")" = "preflight,cloud,timezone,ssh" ]
+    [ "$(jq -r '.meta.modules' "$VPSSEC_REPORTS/summary.json")" = "preflight,timezone,ssh" ]
 }
 
 @test "meta.modules under --exclude does not claim all, and the exclude is recorded" {

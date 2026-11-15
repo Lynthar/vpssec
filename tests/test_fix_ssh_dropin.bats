@@ -366,6 +366,42 @@ PasswordAuthentication no"
     [[ "$output" == *"has no Include"* ]]
 }
 
+# ---- the single-directive fixes ----------------------------------------
+
+@test "ssh fix: each single-directive fix replaces its own line and keeps the others" {
+    printf 'Include %s/*.conf\n' "$SSH_DROPIN_DIR" > "$SSH_CONFIG"
+    local fix line
+    for fix in "ssh.enable_pubkey|PubkeyAuthentication yes" \
+               "ssh.disable_empty_password|PermitEmptyPasswords no" \
+               "ssh.set_max_auth_tries|MaxAuthTries 4" \
+               "ssh.set_login_grace_time|LoginGraceTime 60" \
+               "ssh.disable_x11_forwarding|X11Forwarding no"; do
+        line="${fix#*|}"
+        printf '# earlier run\nUseDNS no\n%s old\n' "${line%% *}" > "$SSH_HARDENING_DROPIN"
+        _sshd_effective "${line,,}"
+        run ssh_fix "${fix%%|*}"
+        [ "$status" -eq 0 ]
+        [ "$(grep -v '^#' "$SSH_HARDENING_DROPIN")" = "UseDNS no
+$line" ]
+    done
+}
+
+@test "ssh fix: a single-directive fix fails when sshd does not report the value" {
+    printf 'Include %s/*.conf\n' "$SSH_DROPIN_DIR" > "$SSH_CONFIG"
+    _sshd_effective "maxauthtries 6"
+    run ssh_fix ssh.set_max_auth_tries
+    [ "$status" -eq 1 ]
+}
+
+@test "ssh fix: a drop-in that cannot be read fails the fix before any write" {
+    # Reading /proc/self/mem from offset 0 fails with EIO, for root as well.
+    [[ -r /proc/self/mem ]] || skip "needs /proc/self/mem"
+    SSH_HARDENING_DROPIN=/proc/self/mem
+    run _ssh_fix_directive MaxAuthTries 4
+    [ "$status" -eq 1 ]
+    _vpssec_refute _vpssec_stub_called sshd
+}
+
 # ---- the backup contract ---------------------------------------------
 
 @test "hardening drop-in: a backup that cannot be taken aborts the write" {

@@ -1,5 +1,5 @@
-# Mutation cases: tests/test_cloud_detect.bats against modules/cloud.sh.
-# mutate-suite: modules/cloud.sh tests/test_cloud_detect.bats
+# Mutation cases: tests/test_cloud_detect.bats against core/cloud.sh.
+# mutate-suite: core/cloud.sh tests/test_cloud_detect.bats
 #
 # DMI and cloud-init live under per-test directories; curl is a stub playing
 # Nova, EC2 or nothing at 169.254.169.254.
@@ -36,3 +36,8 @@ run_case "dmi/hvm-product-is-aws" 1 \
 run_case "dmi/virtual-machine-is-azure" 1 \
     '            # nor "Virtual Machine" (any Hyper-V guest).' \
     '            *"Virtual Machine"*) provider="azure" ;;'
+
+# The getter stops detecting: every module reads "unknown".
+run_case "getter/detection-skipped" 1 \
+    '    [[ -n "$VPSSEC_CLOUD_PROVIDER" ]] || VPSSEC_CLOUD_PROVIDER=$(_detect_cloud_provider)' \
+    '    [[ -n "$VPSSEC_CLOUD_PROVIDER" ]] || VPSSEC_CLOUD_PROVIDER=unknown'

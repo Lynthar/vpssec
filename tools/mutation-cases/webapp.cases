@@ -136,7 +136,7 @@ run_case "ssl/weak-protocol-offered" 1 \
     'ssl_protocols TLSv1 TLSv1.2 TLSv1.3;'
 
 run_case "ssl/validation-ignored" 1 \
-    '    if command -v nginx >/dev/null 2>&1 && ! test_output=$(nginx -t 2>&1); then' \
+    '    if check_command nginx && ! test_output=$(nginx -t 2>&1); then' \
     '    if false; then'
 
 run_case "dispatch/unknown-id-succeeds" 1 \

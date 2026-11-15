@@ -25,9 +25,9 @@ run_case "caps/passed-despite-cut" 4 \
     '    elif (( walked )); then' \
     '    else'
 
-# The cut record read as a path: a phantom SUID finding, and the cut unnoticed.
-run_case "suid/cut-record-as-path" 1 \
-    '        [[ "$file" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }' \
+# The cut record read as a path: a phantom finding, and the cut unnoticed.
+run_case "walk/cut-record-as-path" 1 \
+    '        [[ "$path" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }' \
     '        :'
 
 # Cut walks named but the module still reads as complete: exit 0.
@@ -36,10 +36,10 @@ run_case "cut/module-not-marked" 1 \
     '        :'
 
 # The cut record matched exactly instead of as a suffix: a half-written last
-# path glued to it reads as a SUID finding, and the cut goes unnoticed.
-run_case "suid/cut-record-exact-match" 1 \
-    '        [[ "$file" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }' \
-    '        [[ "$file" == "$_FS_WALK_CUT" ]] && { cut=1; continue; }'
+# path glued to it reads as a finding, and the cut goes unnoticed.
+run_case "walk/cut-record-exact-match" 1 \
+    '        [[ "$path" == *"$_FS_WALK_CUT" ]] && { cut=1; continue; }' \
+    '        [[ "$path" == "$_FS_WALK_CUT" ]] && { cut=1; continue; }'
 
 # A walk that filled its page was not read to its end: the count is a floor.
 run_case "count/capped-count-as-exact" 1 \

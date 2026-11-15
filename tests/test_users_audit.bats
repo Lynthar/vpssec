@@ -493,3 +493,14 @@ SH
     users_audit
     [ "$(_desc users.sudoers_syntax_invalid)" = "$SUDOERS_FILE syntax invalid" ]
 }
+
+@test "users: the cloud provider is known without the cloud module" {
+    # users keys its cloud-init account list off the provider, so it must be
+    # detected without the cloud module, which this file never loads.
+    VPSSEC_CLOUD_PROVIDER="" VPSSEC_CLOUD_TIER=""
+    CLOUD_DMI_DIR="$BATS_TEST_TMPDIR/dmi"
+    mkdir -p "$CLOUD_DMI_DIR"
+    echo "Google" > "$CLOUD_DMI_DIR/sys_vendor"
+    _vpssec_stub curl 7
+    [ "$(vpssec_cloud_provider)" = gcp ]
+}

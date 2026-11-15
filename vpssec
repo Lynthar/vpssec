@@ -27,6 +27,7 @@ _vpssec_complete_path
 # /usr/local/bin/core/ and the installed command dies on the first one.
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/core/common.sh"
 source "${VPSSEC_ROOT}/core/distro.sh"
+source "${VPSSEC_ROOT}/core/cloud.sh"
 source "${VPSSEC_ROOT}/core/state.sh"
 source "${VPSSEC_ROOT}/core/report.sh"
 source "${VPSSEC_ROOT}/core/ui_tui.sh"

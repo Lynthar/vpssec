@@ -1731,7 +1731,7 @@ EOF
     # included anywhere yet, so this only confirms we did not disturb the live
     # config; if nginx -t is available and fails, surface it.
     local test_output
-    if command -v nginx >/dev/null 2>&1 && ! test_output=$(nginx -t 2>&1); then
+    if check_command nginx && ! test_output=$(nginx -t 2>&1); then
         print_error "$(i18n 'webapp.nginx_test_failed')"
         [[ -n "$test_output" ]] && print_info "$(i18n 'webapp.nginx_test_output' "msg=$test_output")"
         return 1

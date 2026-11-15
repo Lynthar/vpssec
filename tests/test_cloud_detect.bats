@@ -52,7 +52,7 @@ SH
 
 _provider() {
     VPSSEC_CLOUD_PROVIDER=""
-    _detect_cloud_provider
+    vpssec_cloud_provider
 }
 
 @test "OpenStack's default DMI: no provider, and no AWS IMDSv1 finding" {

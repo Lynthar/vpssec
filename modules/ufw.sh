@@ -42,15 +42,22 @@ _ufw_get_default_outgoing() {
 UFW_USER_RULES="/etc/ufw/user.rules"
 UFW_USER6_RULES="/etc/ufw/user6.rules"
 
+# The readable ones of the two rule stores, one per line.
+_ufw_rule_files() {
+    local f
+    for f in "$UFW_USER_RULES" "$UFW_USER6_RULES"; do
+        [[ -r "$f" ]] && printf '%s\n' "$f"
+    done
+    return 0
+}
+
 # Is TCP port $1 let in by an inbound ALLOW/LIMIT rule? Never OUT, routed or
 # DENY: outbound read as inbound is a lockout. $2 "any" (default) counts rules
 # confined to an interface or source; "open" only rules from anywhere.
 _ufw_admits_port() {
-    local port="$1" scope="${2:-any}" f
+    local port="$1" scope="${2:-any}"
     local -a files=()
-    for f in "$UFW_USER_RULES" "$UFW_USER6_RULES"; do
-        [[ -r "$f" ]] && files+=("$f")
-    done
+    mapfile -t files < <(_ufw_rule_files)
     (( ${#files[@]} > 0 )) || return 1
     awk -v p="$port" -v scope="$scope" '
         function wild(a) { return a == "0.0.0.0/0" || a == "::/0" }
@@ -132,11 +139,8 @@ _host_has_global_ipv6() {
 # "<ports>[/<proto>]" per inbound ALLOW/LIMIT tuple naming it (ufw writes a
 # space in the name as %20). Nothing when no tuple names it.
 _ufw_app_ports() {
-    local f
     local -a files=()
-    for f in "$UFW_USER_RULES" "$UFW_USER6_RULES"; do
-        [[ -r "$f" ]] && files+=("$f")
-    done
+    mapfile -t files < <(_ufw_rule_files)
     (( ${#files[@]} > 0 )) || return 0
     APP="$1" awk '
         $1 == "###" && $2 == "tuple" && $3 == "###" {

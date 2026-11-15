@@ -43,7 +43,7 @@ _timezone_current() {
     local src=""
 
     # Try to get timezone from timedatectl
-    if command -v timedatectl &>/dev/null; then
+    if check_command timedatectl; then
         tz=$(timedatectl show --property=Timezone --value 2>/dev/null)
         src="timedatectl"
     fi
@@ -207,7 +207,7 @@ _timezone_check_ntp() {
 # Pass condition of the RTC check. Without timedatectl there is nothing to
 # ask and the audit reports nothing, so that passes too.
 _timezone_rtc_utc() {
-    command -v timedatectl &>/dev/null || return 0
+    check_command timedatectl || return 0
     [[ "$(timedatectl show --property=LocalRTC --value 2>/dev/null)" != "yes" ]]
 }
 
@@ -419,7 +419,7 @@ _timezone_fix_enable_ntp() {
     print_info "$(i18n 'timezone.enabling_ntp')"
 
     # Check if systemd-timesyncd is available
-    if command -v timedatectl &>/dev/null; then
+    if check_command timedatectl; then
         local was_on
         was_on=$(timedatectl show --property=NTP --value 2>/dev/null)
         if timedatectl set-ntp true; then
@@ -471,7 +471,7 @@ _timezone_fix_enable_ntp() {
 _timezone_fix_rtc_utc() {
     print_info "$(i18n 'timezone.setting_rtc_utc')"
 
-    if command -v timedatectl &>/dev/null; then
+    if check_command timedatectl; then
         # timedated rewrites or deletes /etc/adjtime: back it up (or record it
         # as created) first, so rollback can put the old RTC mode back.
         backup_file "$TZ_ADJTIME" >/dev/null || return 1

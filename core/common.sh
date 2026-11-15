@@ -47,46 +47,6 @@ VPSSEC_QUIET_SCAN="${VPSSEC_QUIET_SCAN:-0}"  # Suppress detailed output during s
 # (bats helpers); a no-op on the top-level production load path.
 declare -gA VPSSEC_I18N=()
 
-# Lazily filled by the getters below, which delegate to cloud.sh's
-# _detect_cloud_provider when loaded and return "unknown" when it is not.
-# Any module may call them regardless of module load order.
-declare -g VPSSEC_CLOUD_PROVIDER=""
-declare -g VPSSEC_CLOUD_TIER=""
-
-# One of: aws azure gcp alibaba tencent huawei oracle digitalocean
-# vultr linode hetzner ovh scaleway unknown
-vpssec_cloud_provider() {
-    if [[ -n "$VPSSEC_CLOUD_PROVIDER" ]]; then
-        echo "$VPSSEC_CLOUD_PROVIDER"
-        return
-    fi
-    if declare -f _detect_cloud_provider >/dev/null 2>&1; then
-        VPSSEC_CLOUD_PROVIDER=$(_detect_cloud_provider)
-    else
-        VPSSEC_CLOUD_PROVIDER="unknown"
-    fi
-    echo "$VPSSEC_CLOUD_PROVIDER"
-}
-
-# Coarse tier for modules that vary on "what kind of cloud", not which vendor:
-# tier1 = IAM credentials in IMDS, tier2 = link-local IMDS without them,
-# unknown = no network IMDS. aws-or-compatible is tier1: an EC2-shaped IMDS answered.
-vpssec_cloud_tier() {
-    if [[ -n "$VPSSEC_CLOUD_TIER" ]]; then
-        echo "$VPSSEC_CLOUD_TIER"
-        return
-    fi
-    case "$(vpssec_cloud_provider)" in
-        aws|aws-or-compatible|azure|gcp|alibaba|tencent|huawei|oracle)
-            VPSSEC_CLOUD_TIER="tier1" ;;
-        digitalocean|vultr|linode|hetzner|ovh|scaleway)
-            VPSSEC_CLOUD_TIER="tier2" ;;
-        *)
-            VPSSEC_CLOUD_TIER="unknown" ;;
-    esac
-    echo "$VPSSEC_CLOUD_TIER"
-}
-
 # Known-format credentials, one "<kind> <grep flags> <ERE>" each. Vendor-fixed
 # prefixes and PEM headers only, for near-zero false positives (generic PASSWORD= /
 # SECRET= markers are absent); Telegram's prefixless shape is the one exception.
@@ -517,7 +477,7 @@ i18n_load() {
         i18n_file="${VPSSEC_CORE}/i18n/en_US.json"
     fi
 
-    if ! command -v jq &>/dev/null; then
+    if ! check_command jq; then
         log_error "jq is required for i18n support"
         return 1
     fi
@@ -716,17 +676,15 @@ check_required_deps() {
 
 # --- Input Validation Functions ---
 
-# Validate that a path is safe (no path traversal)
+# Accept only an absolute path (a relative one lands wherever vpssec runs) with
+# no newline (the backup manifests hold one path per line). With $2, the path
+# must also resolve to $2 or below it.
 validate_path() {
     local path="$1"
     local base_dir="${2:-}"
 
-    # Check for null or empty
-    [[ -z "$path" ]] && return 1
-
-    # Check for path traversal attempts
-    if [[ "$path" =~ \.\. ]] || [[ "$path" =~ ^[[:space:]] ]] || [[ "$path" =~ [[:space:]]$ ]]; then
-        log_warn "Potentially unsafe path detected: $path"
+    if [[ "$path" != /* || "$path" == *$'\n'* ]]; then
+        log_warn "Unsafe path rejected: $path"
         return 1
     fi
 
@@ -1209,7 +1167,7 @@ get_ssh_ports() {
                 systemctl is-active --quiet "$unit" 2>/dev/null || continue
                 systemctl show -p Listen --value "$unit" 2>/dev/null || true
             done | awk '$2 == "(Stream)" && $1 ~ /:[0-9]+$/ { n = split($1, a, ":"); print a[n] }')
-    if [[ -z "$ports" ]] && command -v sshd &>/dev/null; then
+    if [[ -z "$ports" ]] && check_command sshd; then
         # One listenaddress line per bound address; `ListenAddress host:port`
         # overrides Port, so these lines, not the port lines, are the truth.
         dump=$(sshd -T 2>/dev/null) || dump=""
@@ -1233,6 +1191,11 @@ get_listening_ports() {
 }
 
 # --- Counting helpers ---
+
+# The non-empty lines of stdin joined by $1, as one line.
+join_lines() {
+    awk -v sep="$1" 'length { printf "%s%s", (n++ ? sep : ""), $0 }'
+}
 
 # Count lines in $1, or lines matching pattern $2. Use this instead of
 # `grep -c . || echo 0`, which yields the two-line string "0\n0" on empty
@@ -2012,7 +1975,7 @@ _fs_run_find() {
     # `|| rc=$?`: errexit is on in the process-substitution subshell this runs
     # in, and a bare failing walk would exit before the record is written.
     local rc=0
-    if command -v timeout >/dev/null 2>&1; then
+    if check_command timeout; then
         timeout "$_FS_FIND_TIMEOUT" "$@" || rc=$?
     else
         log_debug "timeout(1) unavailable; running '${label}' scan without time bound"
@@ -2283,9 +2246,9 @@ select_modules() {
         fi
     done
 
-    # Always include preflight, cloud, timezone for context
+    # Always include the context modules, as --include does
     if [[ -n "$selected_modules" ]]; then
-        selected_modules="preflight,cloud,timezone,${selected_modules}"
+        selected_modules="preflight,timezone,${selected_modules}"
     fi
 
     VPSSEC_INCLUDE="$selected_modules"

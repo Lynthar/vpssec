@@ -792,12 +792,8 @@ users_audit() {
     local sys_shell_count=$(count_lines "$sys_shells" '|')
 
     if [[ -n "$sys_shells" && "$sys_shell_count" -gt 0 ]]; then
-        local user_list=""
-        while IFS='|' read -r user uid shell; do
-            [[ -z "$user" ]] && continue
-            user_list+="$user ($shell), "
-        done <<< "$sys_shells"
-        user_list="${user_list%, }"
+        local user_list
+        user_list=$(awk -F'|' 'length($1) { print $1 " (" $3 ")" }' <<<"$sys_shells" | join_lines ", ")
 
         check_emit "users.system_with_shell" low failed \
             title="$(i18n 'users.system_with_shell'): $sys_shell_count" \
@@ -836,12 +832,8 @@ users_audit() {
     local nopasswd_count=$(count_lines "$nopasswd")
 
     if [[ -n "$nopasswd" && "$nopasswd_count" -gt 0 ]]; then
-        local nopasswd_list=""
-        while IFS= read -r entry; do
-            [[ -z "$entry" ]] && continue
-            nopasswd_list+="$entry; "
-        done <<< "$nopasswd"
-        nopasswd_list="${nopasswd_list%; }"
+        local nopasswd_list
+        nopasswd_list=$(join_lines "; " <<<"$nopasswd")
 
         local sev="medium"
         local title_key="users.nopasswd_sudo"
@@ -867,15 +859,11 @@ users_audit() {
     local recent_count=$(count_lines "$recent" '|')
 
     if [[ -n "$recent" && "$recent_count" -gt 0 ]]; then
-        local recent_list=""
-        while IFS='|' read -r user uid created home evidence; do
-            [[ -z "$user" ]] && continue
-            # Carry the evidence token: "home-modified" on a busy box is far
-            # weaker than "home-created", and an operator triaging the list
-            # needs to know which one fired.
-            recent_list+="$user ($created, $evidence), "
-        done <<< "$recent"
-        recent_list="${recent_list%, }"
+        # Carry the evidence token (the last field): "home-modified" on a busy box is
+        # far weaker than "home-created", and triage needs to know which one fired.
+        local recent_list
+        recent_list=$(awk -F'|' 'length($1) { print $1 " (" $3 ", " $NF ")" }' <<<"$recent" \
+            | join_lines ", ")
 
         check_emit "users.recent_users" low failed \
             title="$(i18n 'users.recent_users'): $recent_count" \
@@ -927,12 +915,8 @@ users_audit() {
     local sus_count=$(count_lines "$suspicious" '|')
 
     if [[ -n "$suspicious" && "$sus_count" -gt 0 ]]; then
-        local sus_list=""
-        while IFS='|' read -r user uid shell has_shell; do
-            [[ -z "$user" ]] && continue
-            sus_list+="$user, "
-        done <<< "$suspicious"
-        sus_list="${sus_list%, }"
+        local sus_list
+        sus_list=$(cut -d'|' -f1 <<<"$suspicious" | join_lines ", ")
 
         check_emit "users.suspicious_names" low failed \
             title="$(i18n 'users.suspicious_names'): $sus_count" \
@@ -945,12 +929,10 @@ users_audit() {
     local unusual_count=$(count_lines "$unusual" '|')
 
     if [[ -n "$unusual" && "$unusual_count" -gt 0 ]]; then
-        local unusual_list=""
-        while IFS='|' read -r user uid home; do
-            [[ -z "$user" ]] && continue
-            unusual_list+="$user:$home, "
-        done <<< "$unusual"
-        unusual_list="${unusual_list%, }"
+        # The home is everything after the second "|", so one holding "|" stays whole.
+        local unusual_list
+        unusual_list=$(awk -F'|' 'length($1) { h = $0; sub(/^[^|]*\|[^|]*\|/, "", h); print $1 ":" h }' \
+            <<<"$unusual" | join_lines ", ")
 
         check_emit "users.unusual_home" low failed \
             title="$(i18n 'users.unusual_home'): $unusual_count" \
@@ -963,12 +945,8 @@ users_audit() {
     local policy_count=$(count_lines "$policy_issues")
 
     if [[ -n "$policy_issues" && "$policy_count" -gt 0 ]]; then
-        local policy_list=""
-        while IFS= read -r issue; do
-            [[ -z "$issue" ]] && continue
-            policy_list+="$issue; "
-        done <<< "$policy_issues"
-        policy_list="${policy_list%; }"
+        local policy_list
+        policy_list=$(join_lines "; " <<<"$policy_issues")
 
         check_emit "users.password_policy_weak" low failed \
             title="$(i18n 'users.password_policy_weak'): $(i18n 'common.n_issues' "n=$policy_count")" \
@@ -984,12 +962,8 @@ users_audit() {
     local pwquality_count=$(count_lines "$pwquality_issues")
 
     if [[ -n "$pwquality_issues" && "$pwquality_count" -gt 0 ]]; then
-        local pwq_list=""
-        while IFS= read -r issue; do
-            [[ -z "$issue" ]] && continue
-            pwq_list+="$issue; "
-        done <<< "$pwquality_issues"
-        pwq_list="${pwq_list%; }"
+        local pwq_list
+        pwq_list=$(join_lines "; " <<<"$pwquality_issues")
 
         check_emit "users.pwquality_weak" low failed \
             title="$(i18n 'users.pwquality_weak'): $(i18n 'common.n_issues' "n=$pwquality_count")" \
@@ -1011,12 +985,8 @@ users_audit() {
     local dup_uids
     dup_uids=$(_find_duplicate_uids)
     if [[ -n "$dup_uids" ]]; then
-        local dup_list=""
-        while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            dup_list+="UID=$line; "
-        done <<< "$dup_uids"
-        dup_list="${dup_list%; }"
+        local dup_list
+        dup_list=$(awk 'length { print "UID=" $0 }' <<<"$dup_uids" | join_lines "; ")
         check_emit "users.duplicate_uids" medium failed \
             desc="$dup_list" \
             suggestion="$(i18n 'users.review_duplicate_uids')"
@@ -1026,12 +996,8 @@ users_audit() {
     local hash_issues
     hash_issues=$(_check_hash_method)
     if [[ -n "$hash_issues" ]]; then
-        local hash_list=""
-        while IFS= read -r issue; do
-            [[ -z "$issue" ]] && continue
-            hash_list+="$issue; "
-        done <<< "$hash_issues"
-        hash_list="${hash_list%; }"
+        local hash_list
+        hash_list=$(join_lines "; " <<<"$hash_issues")
         check_emit "users.weak_hash_method" low failed \
             desc="$hash_list" \
             suggestion="$(i18n 'users.fix_hash_method')"
@@ -1050,12 +1016,8 @@ users_audit() {
     local faillog_issues
     faillog_issues=$(_check_faillog_logging)
     if [[ -n "$faillog_issues" ]]; then
-        local fl_list=""
-        while IFS= read -r issue; do
-            [[ -z "$issue" ]] && continue
-            fl_list+="$issue; "
-        done <<< "$faillog_issues"
-        fl_list="${fl_list%; }"
+        local fl_list
+        fl_list=$(join_lines "; " <<<"$faillog_issues")
         check_emit "users.faillog_disabled" low failed \
             desc="$fl_list" \
             suggestion="$(i18n 'users.fix_faillog')"
@@ -1066,12 +1028,8 @@ users_audit() {
     local sudoers_issues
     sudoers_issues=$(_check_sudoers_syntax)
     if [[ -n "$sudoers_issues" ]]; then
-        local su_list=""
-        while IFS= read -r issue; do
-            [[ -z "$issue" ]] && continue
-            su_list+="$issue; "
-        done <<< "$sudoers_issues"
-        su_list="${su_list%; }"
+        local su_list
+        su_list=$(join_lines "; " <<<"$sudoers_issues")
         check_emit "users.sudoers_syntax_invalid" medium failed \
             desc="$su_list" \
             suggestion="$(i18n 'users.fix_sudoers_syntax')"

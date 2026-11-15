@@ -1459,7 +1459,7 @@ score   = clamp(0, 100, base − penalty)
   最终分数都会落到 0。
 
 例如某台机器全量跑是 40 分，`--include=ufw` 单跑却是 0 分（上下文模块
-preflight/cloud/timezone 会自动随任何 `--include` 一起运行，无需手动列出）
+preflight/timezone 会自动随任何 `--include` 一起运行，无需手动列出）
 ——两个数字各自都没算错，但**不能拿来互相比较**。
 
 因此凡是带了 `--include`/`--exclude` 的运行，终端与 Markdown 报告都会
@@ -1510,13 +1510,15 @@ preflight/cloud/timezone 会自动随任何 `--include` 一起运行，无需手
 | 模块 | 用途 |
 |---|---|
 | `preflight` | 环境预检（系统、网络、依赖、监听端口计数） |
-| `cloud` | 云厂商 / Agent 识别 + IMDS 姿态（IMDSv1/v2、user-data 凭据扫描、多云 tier1/tier2 覆盖） |
 | `timezone` | 时区与 NTP 时间同步 |
+
+云厂商识别不靠 `cloud` 模块：`--include` / `--exclude` 怎么选都会做，`users`、`ssh` 等模块照常按它判断。
 
 ### 核心模块
 
 | 模块 | 用途 |
 |---|---|
+| `cloud` | 云 Agent 识别 + IMDS 姿态（IMDSv1/v2、user-data 凭据扫描、多云 tier1/tier2 覆盖） |
 | `users` | 用户安全（UID 0、空密码、重复 UID、NOPASSWD sudo、哈希方法、faillog、sudoers 语法） |
 | `ssh` | SSH 加固（密码认证、root 登录、SSH-7408 全量选项） |
 | `ufw` | 防火墙（UFW/firewalld/iptables/nftables；只认真正在过滤入站的规则集） |

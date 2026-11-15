@@ -97,3 +97,13 @@ run_case "no-owner/source-prefix-claims" 1 \
 run_case "no-owner/all-clear-beside-container-data" 1 \
     '    elif (( walked && ${#keys[@]} == 0 )); then' \
     '    elif (( walked )); then'
+
+# The shared walk stops honouring an exemption: whitelisted SUID binaries report.
+run_case "walk/exemption-ignored" 1 \
+    '        [[ -n "$exempt" ]] && "$exempt" "$path" && continue' \
+    '        :'
+
+# The SGID exemption loses its list: a stock SGID binary reports.
+run_case "sgid/list-ignored" 1 \
+    '        _fs_path_glob "$1" "$pattern" && return 0' \
+    '        :'

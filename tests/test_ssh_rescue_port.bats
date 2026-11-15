@@ -265,8 +265,8 @@ _caller_with_exit_trap() {
     printf '#!/usr/bin/env bash\nexec sleep 300\n' > "$BATS_TEST_TMPDIR/fake-sshd"
     chmod +x "$BATS_TEST_TMPDIR/fake-sshd"
     _vpssec_stub sshd
-    bash -c 'source "$1/core/common.sh"; source "$1/modules/ssh.sh"
-        _log_file=/dev/null; SSH_RESCUE_SSHD="$2"
+    bash -c 'source "$1/core/common.sh"; source "$1/core/cloud.sh"; source "$1/modules/ssh.sh"
+        _log_file=/dev/null; SSH_RESCUE_SSHD="$2"; VPSSEC_CLOUD_PROVIDER=unknown
         _ssh_pick_rescue_port() { echo 2299; }
         _ssh_rescue_is_up() { kill -0 "$SSH_RESCUE_PID" 2>/dev/null; }
         _ssh_rescue_allow_firewall() { :; }

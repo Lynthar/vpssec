@@ -45,6 +45,10 @@ _vpssec_load() {
     # must come AFTER sourcing it and BEFORE the layered files, which re-derive
     # STATE_*_FILE from these at their own source time.
     _vpssec_isolate_dirs
+    # shellcheck source=/dev/null
+    source "$root/core/cloud.sh"
+    # Detection reads the host's DMI and metadata service; a test names its cloud.
+    VPSSEC_CLOUD_PROVIDER=unknown
     # Operator prompts (tty_say) go to stderr, where `run` captures them,
     # whether or not bats itself was started from a terminal.
     _VPSSEC_TTY=/nonexistent/tty

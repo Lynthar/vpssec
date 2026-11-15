@@ -38,23 +38,33 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "validate_path: '..' traversal is rejected" {
-    run validate_path "/etc/../etc/passwd"
-    [ "$status" -ne 0 ]
-}
-
 @test "validate_path: empty path is rejected" {
     run validate_path ""
     [ "$status" -ne 0 ]
 }
 
-@test "validate_path: leading whitespace rejected" {
-    run validate_path " /etc/passwd"
+@test "validate_path: a relative path is rejected" {
+    run validate_path "etc/passwd"
     [ "$status" -ne 0 ]
 }
 
-@test "validate_path: trailing whitespace rejected" {
-    run validate_path "/etc/passwd "
+@test "validate_path: a path holding a newline is rejected" {
+    run validate_path $'/etc/pass\nwd'
+    [ "$status" -ne 0 ]
+}
+
+@test "validate_path: spaces and dots are legal in a file name" {
+    run validate_path "/etc/my file "
+    [ "$status" -eq 0 ]
+    run validate_path "/etc/app..conf"
+    [ "$status" -eq 0 ]
+}
+
+@test "validate_path: '..' cannot climb out of base_dir" {
+    _vpssec_require_gnu_realpath
+    local base="$BATS_TEST_TMPDIR/base"
+    mkdir -p "$base"
+    run validate_path "$base/../escape" "$base"
     [ "$status" -ne 0 ]
 }
 

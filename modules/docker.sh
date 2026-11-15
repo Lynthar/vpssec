@@ -275,12 +275,8 @@ _docker_check_live_restore() {
         return
     fi
     # Daemon unreachable (stopped, or docker not installed at all): fall back
-    # to the user's stated intent in daemon.json.
-    if [[ -f "$DOCKER_DAEMON_JSON" ]]; then
-        jq -e '.["live-restore"] == true' "$DOCKER_DAEMON_JSON" &>/dev/null
-    else
-        return 1
-    fi
+    # to the setting as configured.
+    _docker_configured_setting live-restore true
 }
 
 # From Engine 24 the daemon lists name=no-new-privileges in SecurityOptions

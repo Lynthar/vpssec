@@ -56,3 +56,15 @@ setup() {
     [[ "$output" != *$'\n'* ]]
     [[ "$output" =~ ^[0-9]+$ ]]
 }
+
+@test "join_lines: non-empty lines in order, one separator between, none after" {
+    run join_lines "; " <<<$'a b\n\nc\n'
+    [ "$status" -eq 0 ]
+    [ "$output" = "a b; c" ]
+}
+
+@test "join_lines: nothing in, nothing out" {
+    run join_lines ", " <<<""
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}

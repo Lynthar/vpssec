@@ -805,7 +805,7 @@ fw_backend() {
     # LC_ALL=C: ufw gettext-translates "Status: active" under a non-C locale
     # (e.g. zh_CN "状态： 激活"); without it an active UFW is misdetected and
     # the probe falls through to "nftables" (ufw's chains make nft non-empty).
-    if command -v ufw >/dev/null 2>&1; then
+    if check_command ufw; then
         if out=$(LC_ALL=C ufw status 2>/dev/null); then
             grep -q "Status: active" <<<"$out" && { echo "ufw"; return 0; }
         else
@@ -821,14 +821,14 @@ fw_backend() {
     if (( fwd_rc != 3 && fwd_rc != 4 )) && _fw_firewalld_installed; then
         failed=1
     fi
-    if command -v nft >/dev/null 2>&1; then
+    if check_command nft; then
         if out=$(nft list ruleset 2>/dev/null); then
             _fw_nft_input_filters <<<"$out" && { echo "nftables"; return 0; }
         else
             failed=1
         fi
     fi
-    if command -v iptables >/dev/null 2>&1; then
+    if check_command iptables; then
         if out=$(iptables -S INPUT 2>/dev/null); then
             _fw_iptables_input_filters <<<"$out" && { echo "iptables"; return 0; }
         else
@@ -852,7 +852,7 @@ fw_ipv6_filtered() {
             return 1 ;;
         firewalld) return 0 ;;
     esac
-    if command -v nft >/dev/null 2>&1; then
+    if check_command nft; then
         if out=$(nft list ruleset 2>/dev/null); then
             _fw_nft_input_filters ip6 <<<"$out" && return 0
         else

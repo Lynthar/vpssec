@@ -1,7 +1,7 @@
 # Mutation cases: tests/test_security_levels.bats against core/security_levels.sh.
 # mutate-suite: core/security_levels.sh tests/test_security_levels.bats
 #
-# Score categories the suite pins by id.
+# Score categories the suite pins by id, and by its pass/fail pairing rule.
 
 # sudo logging passes in both of its states, so scoring it scores nothing.
 run_case "score/sudo-logging-ok-scored" 1 \
@@ -21,3 +21,9 @@ run_case "score/cron-clean-scored" 1 \
 run_case "fix/max-auth-tries-unasked" 1 \
     '    ["ssh.set_max_auth_tries"]="Lowers MaxAuthTries to 4: every key a client offers counts as an attempt, so one whose agent offers four or more other keys first is disconnected; set IdentitiesOnly yes with the right IdentityFile on such clients"' \
     '    # ssh.set_max_auth_tries left out'
+
+# A clean at-job scan scored while its findings are not: an empty queue raises
+# the score. No point test names this id; only the pairing rule catches it.
+run_case "pairing/at-jobs-pass-scored" 1 \
+    '    ["scheduling.no_at_jobs"]="info"' \
+    '    ["scheduling.no_at_jobs"]="recommended"'

@@ -35,7 +35,7 @@ _assert_ascii_only() {
 # _cloud_provider_from_imds.
 _provider_ids() {
     local src
-    src="$(_vpssec_repo_root)/modules/cloud.sh"
+    src="$(_vpssec_repo_root)/core/cloud.sh"
     {
         grep -oE 'provider="[a-z][a-z0-9-]*"' "$src" | sed -E 's/provider="(.*)"/\1/'
         awk '/^_cloud_provider_from_imds\(\)/,/^}/' "$src" |
@@ -71,7 +71,7 @@ _provider_ids() {
 }
 
 @test "cloud i18n: every provider id the module can return has a display name" {
-    # _provider_ids scrapes the module source, so a reformat that breaks the
+    # _provider_ids scrapes the detection source, so a reformat that breaks the
     # scrape would silently turn this test into a no-op that still passes.
     [ "$(_provider_ids | wc -l)" -ge 12 ]
 

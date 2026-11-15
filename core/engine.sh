@@ -223,11 +223,11 @@ module_load_all() {
     include=$(_module_normalize_filter "$include")
     exclude=$(_module_normalize_filter "$exclude")
 
-    # Context modules run with every filtered audit: users.sh keys its
-    # cloud-init account list off the detected provider, so an --include
-    # without them classifies differently. An explicit --exclude still wins.
+    # The context modules run with every filtered audit, as the menu runs them;
+    # an explicit --exclude still wins. The cloud provider needs no module: core
+    # detects it whatever runs.
     if [[ -n "$include" ]]; then
-        include="preflight,cloud,timezone,${include}"
+        include="preflight,timezone,${include}"
     fi
 
     # Unknown include tokens are fatal (exit 1) — a typo would otherwise produce

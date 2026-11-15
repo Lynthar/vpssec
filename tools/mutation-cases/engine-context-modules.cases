@@ -1,0 +1,13 @@
+# Mutation cases: tests/test_audit_header.bats against core/engine.sh.
+# mutate-suite: core/engine.sh tests/test_audit_header.bats
+#
+# What an --include run adds: the context modules, and not the cloud module,
+# whose provider detection lives in core.
+
+run_case "include/cloud-injected" 1 \
+    '        include="preflight,timezone,${include}"' \
+    '        include="preflight,cloud,timezone,${include}"'
+
+run_case "include/context-dropped" 1 \
+    '        include="preflight,timezone,${include}"' \
+    '        include="${include}"'

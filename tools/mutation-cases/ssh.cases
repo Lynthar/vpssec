@@ -62,3 +62,21 @@ run_case "include/any-include-counts" 1 \
 run_case "include/relative-not-resolved" 1 \
     '            [[ "$pat" == /* ]] || pat="$base/$pat"' \
     '            :'
+
+# ---- the single-directive fixes ----------------------------------------
+
+run_case "dropin/own-line-kept" 1 \
+    "        kept=\$(grep -v '^#' \"\$SSH_HARDENING_DROPIN\" | grep -ivE \"^(\$names)\") || true" \
+    "        kept=\$(grep -v '^#' \"\$SSH_HARDENING_DROPIN\") || true"
+
+run_case "dropin/other-lines-dropped" 1 \
+    '    [[ -n "$kept" ]] && content="$kept"$'"'"'\n'"'"'"$content"' \
+    '    :'
+
+run_case "directive/value-not-verified" 1 \
+    '    _ssh_reload_safe "$1" "$2"' \
+    '    _ssh_reload_safe'
+
+run_case "directive/wrong-value-written" 1 \
+    '            _ssh_fix_directive LoginGraceTime 60' \
+    '            _ssh_fix_directive LoginGraceTime 120'

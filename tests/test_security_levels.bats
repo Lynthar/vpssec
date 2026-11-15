@@ -131,6 +131,34 @@ setup() {
     [ -z "$scored" ] || { echo "scored though unanswered: $scored" >&2; return 1; }
 }
 
+@test "score category: a pass scores only where a failure of its check does" {
+    # A scored pass on an unscored heuristic lets "nothing found" raise the score.
+    # Ids pair by the function emitting them; an id held in a variable is unseen.
+    # apparmor_enabled is exempt: its scored failure has a function of its own.
+    local out pairs stray id
+    out=$(awk '
+        FNR == NR { cat[$1] = $2; next }
+        FNR == 1 { file = FILENAME; sub(/.*\//, "", file) }
+        /^[a-zA-Z_][a-zA-Z0-9_]*\(\) *\{/ { fn = file ":" substr($0, 1, index($0, "(") - 1) }
+        match($0, /(^|[ \t])(check_emit|_malware_emit_finding) "[a-zA-Z0-9_.]+" [^ ]+ "?(passed|failed)"?/) {
+            s = substr($0, RSTART, RLENGTH); split(s, q, "\"")
+            c = (q[2] in cat) ? cat[q[2]] : "info"
+            if (s ~ /passed"?$/) { if (c != "info") pass[fn] = pass[fn] " " q[2] }
+            else { fails[fn]++; if (c != "info") scored[fn] = 1 }
+        }
+        END {
+            for (f in pass) if (f in fails) n++
+            print "pairs", n + 0
+            for (f in pass) if ((f in fails) && !(f in scored)) print f ":" pass[f]
+        }
+    ' <(for id in "${!CHECK_SCORE_CATEGORY[@]}"; do echo "$id ${CHECK_SCORE_CATEGORY[$id]}"; done) \
+        "$(_vpssec_repo_root)"/modules/*.sh)
+    pairs=$(sed -n 's/^pairs //p' <<<"$out")
+    stray=$(grep -v -e '^pairs ' -e '^baseline\.sh:_baseline_audit_apparmor:' <<<"$out" || true)
+    [ "$pairs" -gt 50 ]
+    [ -z "$stray" ] || { echo "scored pass, unscored failures: $stray" >&2; return 1; }
+}
+
 # Coverage invariant: the malware module is alert-only for everything it detects,
 # so any malware.* fix_id referenced as a check's fix_id MUST land in
 # FIX_ALERT_ONLY.

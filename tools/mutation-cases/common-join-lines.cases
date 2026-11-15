@@ -1,0 +1,13 @@
+# Mutation cases: tests/test_count_lines.bats against core/common.sh.
+# mutate-suite: core/common.sh tests/test_count_lines.bats
+#
+# join_lines builds the one-line lists in findings: an empty line must not leave
+# a doubled separator, and the last item must not trail one.
+
+run_case "join/empty-lines-kept" 1 \
+    "    awk -v sep=\"\$1\" 'length { printf \"%s%s\", (n++ ? sep : \"\"), \$0 }'" \
+    "    awk -v sep=\"\$1\" '{ printf \"%s%s\", (n++ ? sep : \"\"), \$0 }'"
+
+run_case "join/separator-trails" 1 \
+    "    awk -v sep=\"\$1\" 'length { printf \"%s%s\", (n++ ? sep : \"\"), \$0 }'" \
+    "    awk -v sep=\"\$1\" 'length { printf \"%s%s\", \$0, sep }'"

@@ -338,7 +338,7 @@ _kernel_ipv6_scan() {
 # Where issue $1 was found in scan $2: the interface names, comma-separated.
 _kernel_ipv6_where() {
     awk -v tok="$1" '$1 == "bad" && $2 == tok { split($3, p, "."); n = p[4]; gsub("/", ".", n); print n }' <<<"$2" \
-        | paste -sd, - | sed 's/,/, /g'
+        | join_lines ", "
 }
 
 # IPv6 issue tokens, space-separated; $1, when given, is a scan already taken.
@@ -644,7 +644,7 @@ _kernel_audit_ipv6() {
 
     # Left out of the issues above: said, with where to set them, never scored.
     local networkd_links
-    networkd_links=$(_kernel_networkd_links | paste -sd, - | sed 's/,/, /g')
+    networkd_links=$(_kernel_networkd_links | join_lines ", ")
     if [[ -n "$networkd_links" ]]; then
         check_emit "kernel.ipv6_networkd_managed" low failed \
             title="$(i18n 'kernel.ipv6_networkd_managed' "links=$networkd_links")" \
@@ -1345,7 +1345,7 @@ _kernel_fix_ipv6() {
         print_warn "$(i18n 'kernel.ipv6_ra_skipped')"
         log_warn "kernel.harden_ipv6: host uses RA/SLAAC for its IPv6 default route; skipping accept_ra=0 to preserve connectivity"
     fi
-    networkd_links=$(_kernel_networkd_links | paste -sd, - | sed 's/,/, /g')
+    networkd_links=$(_kernel_networkd_links | join_lines ", ")
     [[ -z "$networkd_links" ]] || print_warn "$(i18n 'kernel.ipv6_networkd_skipped' "links=$networkd_links")"
 
     # A parameter counts as fixed only when runtime AND persistence both

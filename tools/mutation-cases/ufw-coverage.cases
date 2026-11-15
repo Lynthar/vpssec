@@ -32,7 +32,7 @@ run_case "admits/any-port-ignored" 1 \
     '            if ($6 == "any") { hit = 1; exit }' \
     '            if (0) { hit = 1; exit }'
 
-run_case "admits/v6-rules-skipped" 1 \
+run_case "rule-files/v6-store-skipped" 1 \
     '    for f in "$UFW_USER_RULES" "$UFW_USER6_RULES"; do' \
     '    for f in "$UFW_USER_RULES"; do'
 

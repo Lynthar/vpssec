@@ -102,6 +102,13 @@ SH
     [ "$status" -eq 0 ]
 }
 
+@test "live-restore check: an unreachable daemon reads the flag on dockerd's command line" {
+    _vpssec_stub docker 1
+    _unit "/usr/sbin/dockerd -H fd:// --live-restore"
+    run _docker_check_live_restore
+    [ "$status" -eq 0 ]
+}
+
 @test "live-restore check: an unreachable daemon with no daemon.json fails" {
     _vpssec_stub docker 1
     run _docker_check_live_restore

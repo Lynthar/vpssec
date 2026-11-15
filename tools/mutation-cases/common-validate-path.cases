@@ -1,0 +1,17 @@
+# Mutation cases: tests/test_validate.bats against core/common.sh.
+# mutate-suite: core/common.sh tests/test_validate.bats
+#
+# validate_path guards the write, backup and restore primitives: a relative path
+# writes wherever vpssec runs, a newline splits a backup manifest line.
+
+run_case "path/relative-accepted" 1 \
+    "    if [[ \"\$path\" != /* || \"\$path\" == *\$'\\n'* ]]; then" \
+    "    if [[ -z \"\$path\" || \"\$path\" == *\$'\\n'* ]]; then"
+
+run_case "path/newline-accepted" 1 \
+    "    if [[ \"\$path\" != /* || \"\$path\" == *\$'\\n'* ]]; then" \
+    "    if [[ \"\$path\" != /* ]]; then"
+
+run_case "path/base-unchecked" 1 \
+    '    if [[ -n "$base_dir" ]]; then' \
+    '    if false; then'
