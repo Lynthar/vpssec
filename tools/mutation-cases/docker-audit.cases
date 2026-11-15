@@ -140,9 +140,57 @@ run_case "userns/stall-reads-as-off" 6 \
 
 # ICC on docker0 is info only while no running container is attached to it.
 run_case "icc/empty-bridge-scored" 1 \
-    "    elif [[ \"\$(_docker network inspect bridge --format '{{len .Containers}}' 2>/dev/null)\" == 0 ]]; then" \
-    '    elif false; then'
+    "    if [[ \"\$(_docker network inspect bridge --format '{{len .Containers}}' 2>/dev/null)\" == 0 ]]; then" \
+    '    if false; then'
 
 run_case "icc/any-bridge-unscored" 1 \
-    "    elif [[ \"\$(_docker network inspect bridge --format '{{len .Containers}}' 2>/dev/null)\" == 0 ]]; then" \
-    '    elif true; then'
+    "    if [[ \"\$(_docker network inspect bridge --format '{{len .Containers}}' 2>/dev/null)\" == 0 ]]; then" \
+    '    if true; then'
+
+# The docker snap's dockerd reads its own daemon.json and runs as snap.docker.dockerd, so
+# the daemon.json fixes change nothing there and the suggestions must name its file.
+run_case "snap/not-detected" 1 \
+    '    [[ "$root" == "$DOCKER_SNAP_DATA"/* ]]' \
+    '    false'
+
+run_case "snap/fixes-offered" 1 \
+    '    _docker_is_snap && snap=1' \
+    '    :'
+
+run_case "snap/nnp-fix-offered" 1 \
+    '        ((snap)) || fix_id="docker.enable_no_new_privileges"' \
+    '        fix_id="docker.enable_no_new_privileges"'
+
+run_case "snap/etc-file-named" 1 \
+    "        printf '%s\\n' \"path=\$DOCKER_SNAP_DATA/current/config/daemon.json\" \\" \
+    "        printf '%s\\n' \"path=\$DOCKER_DAEMON_JSON\" \\"
+
+run_case "snap/docker-service-reloaded" 1 \
+    '            "reload=systemctl kill -s HUP --kill-whom=main snap.docker.dockerd" \' \
+    '            "reload=systemctl reload docker" \'
+
+run_case "snap/docker-service-restarted" 1 \
+    '            "restart=snap restart docker"' \
+    '            "restart=systemctl restart docker"'
+
+# Without the params a suggestion shows {path} and {restart} as written.
+run_case "where/daemon-settings-unfilled" 1 \
+    '    mapfile -t where < <(_docker_daemon_where)' \
+    '    :'
+
+run_case "where/nnp-params-dropped" 1 \
+    "            suggestion=\"\$(i18n 'docker.no_new_privileges_disabled_suggestion' \"\${where[@]}\")\" \\" \
+    "            suggestion=\"\$(i18n 'docker.no_new_privileges_disabled_suggestion')\" \\"
+
+run_case "where/userns-unfilled" 1 \
+    '        mapfile -t where < <(_docker_daemon_where)' \
+    '        :'
+
+run_case "where/icc-unfilled" 2 \
+    '    mapfile -t where < <(_docker_daemon_where)' \
+    '    :'
+
+# ICC off falls through to the "on" findings as well.
+run_case "icc/passed-falls-through" 7 \
+    '        return' \
+    '        :'

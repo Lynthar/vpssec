@@ -18,6 +18,9 @@ DOCKER_STALL_MARK="${VPSSEC_STATE}/.docker-stalled"
 DOCKER_PROC_DIR="/proc"
 # Docker from snap: on PATH in a login shell, but not in sudo's secure_path on Debian.
 DOCKER_SNAP_CLI="/snap/bin/docker"
+# The docker snap's data directory. Its dockerd runs as snap.docker.dockerd, keeps its data
+# root under common/ and reads current/config/daemon.json, never $DOCKER_DAEMON_JSON.
+DOCKER_SNAP_DATA="/var/snap/docker"
 
 # --- Docker Helper Functions ---
 
@@ -49,6 +52,27 @@ _docker_installed() {
 # daemon settings below do not exist there and must not be read as "off".
 _docker_is_podman() {
     [[ "$(docker --version 2>/dev/null)" == [Pp]odman* ]]
+}
+
+# True when the answering dockerd is the docker snap's: the snap puts --data-root under
+# $DOCKER_SNAP_DATA on dockerd's command line, where daemon.json cannot move it.
+_docker_is_snap() {
+    local root
+    root=$(_docker info --format '{{.DockerRootDir}}' 2>/dev/null) || return 1
+    [[ "$root" == "$DOCKER_SNAP_DATA"/* ]]
+}
+
+# i18n params for a daemon setting's suggestion: the daemon.json the answering dockerd
+# reads, and the commands that reload and restart it.
+_docker_daemon_where() {
+    if _docker_is_snap; then
+        printf '%s\n' "path=$DOCKER_SNAP_DATA/current/config/daemon.json" \
+            "reload=systemctl kill -s HUP --kill-whom=main snap.docker.dockerd" \
+            "restart=snap restart docker"
+    else
+        printf '%s\n' "path=$DOCKER_DAEMON_JSON" "reload=systemctl reload docker" \
+            "restart=systemctl restart docker"
+    fi
 }
 
 # Major version of the answering dockerd; fails when none answers.
@@ -511,24 +535,31 @@ _docker_audit_capabilities() {
 }
 
 _docker_audit_daemon_settings() {
-    local issues=0
+    local issues=0 snap=0 fix_id=""
+    local -a where=()
+    mapfile -t where < <(_docker_daemon_where)
+    # Both fixes write $DOCKER_DAEMON_JSON and restart docker.service, which the docker snap
+    # does not use: there the suggestion names its own file and commands instead.
+    _docker_is_snap && snap=1
 
     # Check live-restore
     if ! _docker_check_live_restore; then
+        ((snap)) || fix_id="docker.enable_live_restore"
         check_emit "docker.no_live_restore" low failed \
             desc="$(i18n 'docker.no_live_restore_desc')" \
-            suggestion="$(i18n 'docker.no_live_restore_suggestion')" \
-            fix="docker.enable_live_restore"
+            suggestion="$(i18n 'docker.no_live_restore_suggestion' "${where[@]}")" \
+            fix="$fix_id"
         print_severity "low" "$(i18n 'docker.no_live_restore')"
         ((issues++)) || true
     fi
 
     # Check no-new-privileges
     if ! _docker_check_no_new_privileges; then
+        ((snap)) || fix_id="docker.enable_no_new_privileges"
         check_emit "docker.no_new_privileges_disabled" low failed \
             desc="$(i18n 'docker.no_new_privileges_disabled_desc')" \
-            suggestion="$(i18n 'docker.no_new_privileges_disabled_suggestion')" \
-            fix="docker.enable_no_new_privileges"
+            suggestion="$(i18n 'docker.no_new_privileges_disabled_suggestion' "${where[@]}")" \
+            fix="$fix_id"
         print_severity "low" "$(i18n 'docker.no_new_privileges_disabled')"
         ((issues++)) || true
     fi
@@ -600,13 +631,15 @@ _docker_audit_seccomp_unconfined() {
 # daemon-level setting, not per-container, so this check must distinguish
 # "compiled in and available" from "actually active".
 _docker_audit_userns_remap() {
+    local -a where=()
     if _docker_check_userns; then
         check_emit "docker.userns_enabled" low passed
         print_ok "$(i18n 'docker.userns_enabled')"
     elif ! _docker_stalled; then
+        mapfile -t where < <(_docker_daemon_where)
         check_emit "docker.userns_not_enabled" low failed \
             desc="$(i18n 'docker.userns_not_enabled_desc')" \
-            suggestion="$(i18n 'docker.userns_fix')"
+            suggestion="$(i18n 'docker.userns_fix' "${where[@]}")"
         print_severity "low" "$(i18n 'docker.userns_not_enabled')"
     fi
 }
@@ -634,21 +667,25 @@ _docker_audit_host_network() {
 # ICC=true lets every container on docker0 talk to every other. Low, because
 # this IS the out-of-box default and medium would be noisy on every install.
 _docker_audit_default_bridge_icc() {
+    local -a where=()
     if _docker_check_icc_disabled; then
         check_emit "docker.default_bridge_icc_disabled" low passed
         print_ok "$(i18n 'docker.default_bridge_icc_disabled')"
-    elif [[ "$(_docker network inspect bridge --format '{{len .Containers}}' 2>/dev/null)" == 0 ]]; then
+        return
+    fi
+    mapfile -t where < <(_docker_daemon_where)
+    if [[ "$(_docker network inspect bridge --format '{{len .Containers}}' 2>/dev/null)" == 0 ]]; then
         # No running container on docker0 for ICC to expose (a compose network has
         # its own option); one started later with plain `docker run` lands here.
         # A daemon that cannot count keeps the scored finding.
         check_emit "docker.default_bridge_icc_unused" low failed \
             desc="$(i18n 'docker.default_bridge_icc_unused_desc')" \
-            suggestion="$(i18n 'docker.fix_default_bridge_icc')"
+            suggestion="$(i18n 'docker.fix_default_bridge_icc' "${where[@]}")"
         print_info "$(i18n 'docker.default_bridge_icc_unused')"
     else
         check_emit "docker.default_bridge_icc_enabled" low failed \
             desc="$(i18n 'docker.default_bridge_icc_enabled_desc')" \
-            suggestion="$(i18n 'docker.fix_default_bridge_icc')"
+            suggestion="$(i18n 'docker.fix_default_bridge_icc' "${where[@]}")"
         print_severity "low" "$(i18n 'docker.default_bridge_icc_enabled')"
     fi
 }

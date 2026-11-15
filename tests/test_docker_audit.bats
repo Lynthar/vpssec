@@ -393,3 +393,63 @@ SH
     _docker_audit_default_bridge_icc >/dev/null
     [ "$(_emitted)" = "docker.default_bridge_icc_enabled failed" ]
 }
+
+@test "icc: off is one passed check" {
+    _docker_bridge false 0
+    _docker_audit_default_bridge_icc >/dev/null
+    [ "$(_emitted)" = "docker.default_bridge_icc_disabled passed" ]
+}
+
+# ---- which daemon.json the daemon reads ---------------------------------------
+
+# A Docker 29.8 daemon with every daemon setting at its default, keeping its data under
+# $1. SecurityOptions as the docker snap 29.8.0 (revision 3618) answered on Debian 13.
+_docker_daemon_defaults() {
+    _vpssec_stub_script docker <<SH
+case "\$*" in
+    "--version") echo "Docker version 29.8.0" ;;
+    *DockerRootDir*) echo "$1" ;;
+    *ServerVersion*) echo "29.8.0" ;;
+    *LiveRestoreEnabled*) echo false ;;
+    *SecurityOptions*) echo '["name=apparmor,profile=default","name=seccomp,profile=builtin","name=cgroupns"]' ;;
+    *enable_icc*) echo true ;;
+    *"len .Containers"*) echo 0 ;;
+    *) echo "" ;;
+esac
+exit 0
+SH
+}
+
+_daemon_findings="docker.no_live_restore docker.no_new_privileges_disabled
+    docker.userns_not_enabled docker.default_bridge_icc_unused"
+
+@test "snap: no daemon.json fix is offered, and each suggestion names the snap's file" {
+    # The snap's dockerd reads its own daemon.json and runs as snap.docker.dockerd: a fix
+    # writing /etc/docker/daemon.json and restarting docker.service changes nothing.
+    _docker_daemon_defaults /var/snap/docker/common/var-lib-docker
+    docker_audit >/dev/null
+    local id
+    for id in $_daemon_findings; do
+        _emitted | grep -qx "$id failed"
+        [[ "$(_field "$id" suggestion)" == *" /var/snap/docker/current/config/daemon.json"* ]]
+    done
+    [ -z "$(_field docker.no_live_restore fix_id)" ]
+    [ -z "$(_field docker.no_new_privileges_disabled fix_id)" ]
+    [[ "$(_field docker.no_live_restore suggestion)" == \
+        *": systemctl kill -s HUP --kill-whom=main snap.docker.dockerd" ]]
+    [[ "$(_field docker.no_new_privileges_disabled suggestion)" == *": snap restart docker. "* ]]
+    _vpssec_refute grep -q "$DOCKER_DAEMON_JSON" "$VPSSEC_STATE/checks.json"
+}
+
+@test "a dockerd outside the snap keeps the daemon.json fixes and names that file" {
+    _docker_daemon_defaults /var/lib/docker
+    docker_audit >/dev/null
+    local id
+    for id in $_daemon_findings; do
+        [[ "$(_field "$id" suggestion)" == *" $DOCKER_DAEMON_JSON"* ]]
+    done
+    [ "$(_field docker.no_live_restore fix_id)" = docker.enable_live_restore ]
+    [ "$(_field docker.no_new_privileges_disabled fix_id)" = docker.enable_no_new_privileges ]
+    [[ "$(_field docker.no_live_restore suggestion)" == *": systemctl reload docker" ]]
+    [[ "$(_field docker.no_new_privileges_disabled suggestion)" == *": systemctl restart docker. "* ]]
+}

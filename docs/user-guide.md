@@ -1149,6 +1149,12 @@ docker run --user 1000:1000 myimage
 `docker.enable_no_new_privileges`（需确认，要手打 `yes` 才重启 dockerd）。两项都把设置合并进
 现有的 `daemon.json`，保留文件原来的权限与属主（它可能存着镜像仓库或代理的凭据）
 
+**snap 版 Docker**（`snap install docker`）：守护进程读的是 `/var/snap/docker/current/config/daemon.json`，
+单元是 `snap.docker.dockerd`，所以上面两个修复都不提议，照下面的步骤手动改：`f` 换成那个文件；
+live-restore 用 `systemctl kill -s HUP --kill-whom=main snap.docker.dockerd` 重新加载（容器照跑），
+no-new-privileges 用 `snap restart docker` 重启。审计时要让 `docker` 指向 snap 版：
+`sudo env PATH="$PATH:/snap/bin" vpssec audit`（Debian 的 sudo 不带 `/snap/bin`）
+
 **修复方法**:
 ```bash
 # 0. dockerd 的命令行上已经带了同名参数（例如 --live-restore）时，改 unit 里那个参数，
