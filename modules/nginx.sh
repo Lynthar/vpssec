@@ -18,9 +18,9 @@ NGINX_CATCHALL_KEY="${NGINX_SSL_DIR}/vpssec-catchall.key"
 
 # --- Nginx Helper Functions ---
 
-# Catchall coverage of a config text as "<needed> <have>": needed is both | 80 (nginx
-# serves 443 or not), have is both | 80only | 443only | none (a default_server there
-# answers 444). With $2 = rivals: "<port>\t<server_name>" per non-catchall default_server.
+# Catchall coverage "<needed> <have>": needed both | 80 (nginx serves 443 or not); have both
+# | 80only | 443only | none by whether each port's default server (its default_server, else
+# its first, as nginx picks) answers 444. $2 = rivals: "<port>\t<name>" per explicit one not.
 _nginx_catchall_coverage_from_text() {
     nginx_statements <<<"$1" | WANT="${2:-coverage}" awk -F'\t' '
         function port(a,   r) {
@@ -30,23 +30,35 @@ _nginx_catchall_coverage_from_text() {
             return (a ~ /^[0-9]+$/) ? a : "80"
         }
         $1 == 0 || $2 ~ /^(stream|mail)(\/|$)/ { next }
+        { c = $2; sub(/^http\//, "", c) }
         $3 == "listen" {
             n = split($4, w, " ")
             p = port(w[1]); dflt = 0
             for (i = 2; i <= n; i++) if (w[i] == "default_server" || w[i] == "default") dflt = 1
+            if (p != "" && !(p in first)) first[p] = $1
+            if (dflt) explicit[p] = 1
             if (p == "80" && dflt) d80[$1] = 1
             if (p == "443") { on443[$1] = 1; if (dflt) d443[$1] = 1 }
         }
-        $3 == "return" && $4 ~ /^444( |$)/ { ret[$1] = 1 }
+        # 444 answers unknown hosts at server level, in an if there negating the Host, or
+        # in a lone location /: one in /.git beside paths it serves lets them in.
+        c == "server" && $3 == "return" && $4 ~ /^444( |$)/ { ret[$1] = 1 }
+        c == "server" && $3 == "if" { hostif[$1] = ($4 ~ /^\(\$(http_)?host / && $4 ~ / !(~\*?|=) /) }
+        c == "server/if" && $3 == "return" && $4 ~ /^444( |$)/ && hostif[$1] { ret[$1] = 1 }
+        c == "server" && $3 == "location" { nloc[$1]++; if ($4 == "/") root[$1] = $5 }
+        c == "server/location" && $3 == "return" && $4 ~ /^444( |$)/ { locret[$1, $5] = 1 }
         # nginx >= 1.19.4 refuses an unknown SNI outright; that covers 443 too.
         $3 == "ssl_reject_handshake" && $4 == "on" { rej[$1] = 1 }
         $3 == "server_name" { name[$1] = $4 }
         END {
+            for (s in nloc) if (nloc[s] == 1 && (s in root) && ((s, root[s]) in locret)) ret[s] = 1
             if (ENVIRON["WANT"] == "rivals") {
                 for (s in d80) if (!(s in ret)) print "80\t" name[s]
                 for (s in d443) if (!((s in ret) || (s in rej))) print "443\t" name[s]
                 exit
             }
+            if (!("80" in explicit) && ("80" in first)) d80[first["80"]] = 1
+            if (!("443" in explicit) && ("443" in first)) d443[first["443"]] = 1
             for (s in d80) if (s in ret) c80 = 1
             for (s in d443) if ((s in ret) || (s in rej)) c443 = 1
             for (s in on443) if (!((s in d443) && ((s in ret) || (s in rej)))) serves = 1
@@ -91,9 +103,52 @@ _nginx_test_config() {
     nginx -t 2>&1
 }
 
-# --- DoS hardening. nginx_statements inlines every include, so one pass finds a
-# directive's effective last value. Any occurrence past the threshold is the
-# finding: one served location weaker than policy. ---
+# --- DoS hardening. nginx_statements inlines every include, so one pass sees
+# every value a directive takes. The largest is the finding: one served
+# location weaker than policy, named so the fix lands where the value is. ---
+
+# Every value directive $2 takes in nginx_statements output $1, "<value>\t<where>" a line
+# (http{} or "server <name>[, location <path>]"); the default $3 too where it applies (no
+# http{} value, a server setting none): at the first such server, $4 after its label.
+_nginx_directive_values() {
+    K="$2" D="$3" DFLT="$4" awk -F'\t' '
+        { c = $2; sub(/^http\//, "", c) }
+        $1 > 0 { if ($1 > last) last = $1 }
+        $1 > 0 && c == "server" && $3 == "server_name" && !($1 in nm) { nm[$1] = $4 }
+        $1 > 0 && c == "server" && $3 == "listen" && !($1 in ls) { ls[$1] = $4 }
+        $3 == "location" { path[$5] = $4 }
+        $3 == ENVIRON["K"] {
+            n++; val[n] = $4; sid[n] = $1; lid[n] = (c ~ /location/) ? $5 : ""
+            if (c == "http") top = 1
+            if (c == "server") own[$1] = 1
+        }
+        function label(s, l,   x) {
+            if (s == 0) return "http{}"
+            x = nm[s]; sub(/ .*/, "", x)
+            if (x == "" || x == "_") { x = ls[s]; sub(/ .*/, "", x) }
+            return "server " x (l != "" ? ", location " path[l] : "")
+        }
+        END {
+            for (i = 1; i <= n; i++) print val[i] "\t" label(sid[i], lid[i])
+            if (top) exit
+            for (s = 1; s <= last; s++) if (!(s in own)) { print ENVIRON["D"] "\t" label(s, "") " " ENVIRON["DFLT"]; exit }
+            if (!n) print ENVIRON["D"] "\thttp{} " ENVIRON["DFLT"]
+        }' <<< "$1"
+}
+
+# The largest value directive $2 takes anywhere in $1 (default $3), as
+# "<seconds>\t<as written>\t<where>".
+_nginx_directive_max() {
+    local raw where secs best=-1 line=""
+    while IFS=$'\t' read -r raw where; do
+        secs=$(_nginx_parse_seconds "$raw")
+        if (( secs > best )); then
+            best=$secs
+            line="$secs"$'\t'"$raw"$'\t'"$where"
+        fi
+    done < <(_nginx_directive_values "$1" "$2" "$3" "$(i18n 'nginx.dos_where_default')")
+    echo "$line"
+}
 
 # The last value of a directive in nginx_statements output, or the default when
 # nothing sets it.
@@ -209,8 +264,10 @@ _nginx_audit_catchall() {
             print_severity "low" "$(i18n 'nginx.catchall_partial_443')"
             ;;
         *)
+            local desc_key='nginx.no_catchall_desc'
+            [[ "$coverage" == 80\ * ]] && desc_key='nginx.no_catchall_80_desc'
             check_emit "nginx.no_catchall" low failed \
-                desc="$(i18n 'nginx.no_catchall_desc')" \
+                desc="$(i18n "$desc_key")" \
                 suggestion="$suggestion" \
                 fix="$fix_id"
             print_severity "low" "$(i18n 'nginx.no_catchall')"
@@ -225,48 +282,44 @@ _nginx_audit_dos_hardening() {
     local issues=()
 
     # 1. client_header_timeout — CIS 5.2.1, default 60s, recommended ≤10s.
-    local cht_raw cht
-    cht_raw=$(_nginx_get_directive_value "$effective" "client_header_timeout" "60s")
-    cht=$(_nginx_parse_seconds "$cht_raw")
+    local cht_raw cht cht_where
+    IFS=$'\t' read -r cht cht_raw cht_where <<< "$(_nginx_directive_max "$effective" client_header_timeout 60s)"
     if (( cht > 10 )); then
         check_emit "nginx.client_header_timeout_high" low failed \
-            desc="$(i18n 'nginx.client_header_timeout_high_desc' "cht_raw=$cht_raw")" \
+            desc="$(i18n 'nginx.client_header_timeout_high_desc' "cht_raw=$cht_raw" "where=$cht_where")" \
             suggestion="$(i18n 'nginx.fix_dos_timeouts')"
         issues+=("client_header_timeout=$cht_raw")
         print_severity "low" "$(i18n 'nginx.client_header_timeout_high'): $cht_raw"
     fi
 
     # 2. client_body_timeout — CIS 5.2.1, default 60s, recommended ≤10s.
-    local cbt_raw cbt
-    cbt_raw=$(_nginx_get_directive_value "$effective" "client_body_timeout" "60s")
-    cbt=$(_nginx_parse_seconds "$cbt_raw")
+    local cbt_raw cbt cbt_where
+    IFS=$'\t' read -r cbt cbt_raw cbt_where <<< "$(_nginx_directive_max "$effective" client_body_timeout 60s)"
     if (( cbt > 10 )); then
         check_emit "nginx.client_body_timeout_high" low failed \
-            desc="$(i18n 'nginx.client_body_timeout_high_desc' "cbt_raw=$cbt_raw")" \
+            desc="$(i18n 'nginx.client_body_timeout_high_desc' "cbt_raw=$cbt_raw" "where=$cbt_where")" \
             suggestion="$(i18n 'nginx.fix_dos_timeouts')"
         issues+=("client_body_timeout=$cbt_raw")
         print_severity "low" "$(i18n 'nginx.client_body_timeout_high'): $cbt_raw"
     fi
 
     # 3. keepalive_timeout — default 75s, recommended ≤30s (F5 NGINX STIG).
-    local kt_raw kt
-    kt_raw=$(_nginx_get_directive_value "$effective" "keepalive_timeout" "75s")
-    kt=$(_nginx_parse_seconds "$kt_raw")
+    local kt_raw kt kt_where
+    IFS=$'\t' read -r kt kt_raw kt_where <<< "$(_nginx_directive_max "$effective" keepalive_timeout 75s)"
     if (( kt > 30 )); then
         check_emit "nginx.keepalive_timeout_high" low failed \
-            desc="$(i18n 'nginx.keepalive_timeout_high_desc' "kt_raw=$kt_raw")" \
+            desc="$(i18n 'nginx.keepalive_timeout_high_desc' "kt_raw=$kt_raw" "where=$kt_where")" \
             suggestion="$(i18n 'nginx.fix_dos_keepalive')"
         issues+=("keepalive_timeout=$kt_raw")
         print_severity "low" "$(i18n 'nginx.keepalive_timeout_high'): $kt_raw"
     fi
 
     # 4. send_timeout — default 60s, recommended ≤10s.
-    local st_raw st
-    st_raw=$(_nginx_get_directive_value "$effective" "send_timeout" "60s")
-    st=$(_nginx_parse_seconds "$st_raw")
+    local st_raw st st_where
+    IFS=$'\t' read -r st st_raw st_where <<< "$(_nginx_directive_max "$effective" send_timeout 60s)"
     if (( st > 10 )); then
         check_emit "nginx.send_timeout_high" low failed \
-            desc="$(i18n 'nginx.send_timeout_high_desc' "st_raw=$st_raw")" \
+            desc="$(i18n 'nginx.send_timeout_high_desc' "st_raw=$st_raw" "where=$st_where")" \
             suggestion="$(i18n 'nginx.fix_dos_timeouts')"
         issues+=("send_timeout=$st_raw")
         print_severity "low" "$(i18n 'nginx.send_timeout_high'): $st_raw"

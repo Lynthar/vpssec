@@ -579,6 +579,17 @@ _emitted() { jq -r '.[].id' "$VPSSEC_STATE/checks.json"; }
     [[ "$row" == "|"*"Port 80 already has a default_server"*"server_name: _"*"sites-enabled/default"* ]]
 }
 
+@test "audit: where only port 80 is owed a catchall, the finding speaks of port 80 alone" {
+    # nginx served nothing on 443 (Xray held it), yet the finding said 80 and 443 both lacked one.
+    _nginx_audit_with_dump 'http { server { listen 80; server_name a.example; root /srv; } }'
+    local row
+    row=$(jq -r '.[] | select(.id == "nginx.no_catchall") | "\(.fix_id)|\(.desc)"' "$VPSSEC_STATE/checks.json")
+    [[ "$row" == "nginx.add_catchall|Port 80 has no default server answering unknown hostnames with 444"* ]]
+
+    _nginx_audit_with_dump 'http { server { listen 80; listen 443 ssl; server_name a.example; root /srv; } }'
+    [[ "$(jq -r '.[] | select(.id == "nginx.no_catchall") | .desc' "$VPSSEC_STATE/checks.json")" == "Neither port 80 nor port 443"* ]]
+}
+
 @test "audit: a config nginx -t rejects is one finding, with no catchall or DoS verdicts" {
     _vpssec_stub_script nginx <<'SH'
 case "$*" in

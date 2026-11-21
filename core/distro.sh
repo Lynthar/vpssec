@@ -356,6 +356,53 @@ _distro_kernel_reboot_check() {
     echo "kernel: $running → $latest"
 }
 
+DISTRO_PROC="${DISTRO_PROC:-/proc}"
+DISTRO_DPKG_INFO="${DISTRO_DPKG_INFO:-/var/lib/dpkg/info}"
+
+# dnf needs-restarting's NEED_REBOOT in Debian's names. The libraries and daemons
+# count while a process still maps a deleted file of theirs (the update put the
+# new one at the same path); microcode and firmware, mapped by none, once upgraded.
+DISTRO_REBOOT_MAPPED_PKGS=(libc6 libsystemd0 libsystemd-shared systemd dbus dbus-daemon dbus-broker)
+DISTRO_REBOOT_BOOTED_PKGS=(intel-microcode amd64-microcode linux-firmware)
+
+# Files some process maps although they were deleted, one path per line, each once.
+_distro_deleted_mappings() {
+    cat "$DISTRO_PROC"/[0-9]*/maps 2>/dev/null | awk '
+        / \(deleted\)$/ {
+            p = $0
+            for (i = 1; i <= 5; i++) sub(/^[^ ]+ +/, "", p)
+            sub(/ \(deleted\)$/, "", p)
+            if (p ~ /^\/(usr|lib[^\/]*|bin|sbin)\// && !seen[p]++) print p
+        }'
+}
+
+# Which of the packages named dpkg unpacked since boot: it rewrites a package's
+# file list each time.
+_distro_pkgs_unpacked_since_boot() {
+    local boot p f m
+    boot=$(awk '$1 == "btime" {print $2; exit}' "$DISTRO_PROC/stat" 2>/dev/null)
+    [[ "$boot" =~ ^[0-9]+$ ]] || return 0
+    for p; do
+        for f in "$DISTRO_DPKG_INFO/$p.list" "$DISTRO_DPKG_INFO/$p":*.list; do
+            m=$(stat -c %Y "$f" 2>/dev/null) || continue
+            if (( m > boot )); then echo "$p"; break; fi
+        done
+    done
+}
+
+# The core packages updated under the running system, one name per line, each
+# once (the two lists share none). Reading other processes' maps needs root;
+# without it fewer are found.
+_distro_debian_core_pkgs_pending() {
+    local -a paths=()
+    mapfile -t paths < <(_distro_deleted_mappings)
+    {
+        pkg_file_owners "${paths[@]}"
+        _distro_pkgs_unpacked_since_boot "${DISTRO_REBOOT_BOOTED_PKGS[@]}"
+    } | awk -v want=" ${DISTRO_REBOOT_MAPPED_PKGS[*]} ${DISTRO_REBOOT_BOOTED_PKGS[*]} " \
+        'index(want, " " $0 " ")'
+}
+
 # Ubuntu's reboot-required.pkgs, which each asking package appends to and nothing
 # prunes: every name once, at its last request, without packages since removed.
 _distro_reboot_flag_pkgs() {
@@ -380,16 +427,21 @@ pkg_reboot_required() {
                 _distro_reboot_flag_pkgs "$DISTRO_REBOOT_FLAG.pkgs"
                 return 0
             fi
+            rc=2
             if command -v needrestart >/dev/null 2>&1 && out=$(needrestart -k -b 2>/dev/null); then
+                rc=0
                 _distro_needrestart_kernel_pending "$out" || rc=$?
-                if (( rc == 0 )); then
-                    awk -F': ' '/^NEEDRESTART-KCUR:/ && !c {c=$2} /^NEEDRESTART-KEXP:/ && !e {e=$2}
+                (( rc == 0 )) && awk -F': ' '/^NEEDRESTART-KCUR:/ && !c {c=$2} /^NEEDRESTART-KEXP:/ && !e {e=$2}
                         END {if (c != "" && e != "" && c != e) print "kernel: " c " → " e}' <<<"$out"
-                    return 0
-                fi
-                (( rc == 1 )) && return 1
             fi
-            _distro_kernel_reboot_check
+            if (( rc == 2 )); then
+                rc=0
+                _distro_kernel_reboot_check || rc=$?
+            fi
+            # What a kernel comparison cannot see, and dnf's answer covers on RHEL.
+            out=$(_distro_debian_core_pkgs_pending)
+            [[ -n "$out" ]] && { printf '%s\n' "$out"; return 0; }
+            return "$rc"
             ;;
         rhel)
             # Read the text, not the rc: dnf exits 1 both for "reboot required"
@@ -538,6 +590,23 @@ pkg_missing() {
         pkg_is_installed "$p" || rc=$?
         (( rc == 1 )) && echo "$p"
     done
+    return 0
+}
+
+# The packages dpkg says own the files named, a name per line without its architecture,
+# each once, in one query; a /usr path is asked by its pre-merged spelling too. Unowned
+# files, and hosts without dpkg, add nothing.
+pkg_file_owners() {
+    [[ "$VPSSEC_PKG_MGR" == apt ]] && (( $# )) || return 0
+    local -a q=()
+    local p
+    for p; do
+        q+=("$p")
+        [[ "$p" =~ ^/usr/(lib|lib64|bin|sbin)/ ]] && q+=("${p#/usr}")
+    done
+    LC_ALL=C dpkg-query -S -- "${q[@]}" 2>/dev/null | awk -F': ' '
+        !/^diversion / { n = split($1, o, ", ")
+                         for (i = 1; i <= n; i++) { sub(/:.*/, "", o[i]); if (!seen[o[i]]++) print o[i] } }'
     return 0
 }
 
@@ -744,13 +813,17 @@ distro_integrity_package() {
 
 DISTRO_UFW_DEFAULTS="${DISTRO_UFW_DEFAULTS:-/etc/default/ufw}"
 
-# The file ufw hands to `sysctl -p` each time it starts or reloads: IPT_SYSCTL
-# in its defaults, read as data rather than sourced. Empty when none is named.
-fw_ufw_sysctl_file() {
+# Value of $1 in ufw's defaults file, read as data rather than sourced; empty
+# when the file or the key is absent. The last assignment wins, as in a shell.
+fw_ufw_default() {
     [[ -r "$DISTRO_UFW_DEFAULTS" ]] || return 0
-    awk '/^[ \t]*IPT_SYSCTL=/ { v = substr($0, index($0, "=") + 1) }
+    K="$1" awk '$0 ~ ("^[ \t]*" ENVIRON["K"] "=") { v = substr($0, index($0, "=") + 1) }
          END { gsub(/^[ \t"\047]+|[ \t"\047]+$/, "", v); print v }' "$DISTRO_UFW_DEFAULTS"
 }
+
+# The file ufw hands to `sysctl -p` each time it starts or reloads: IPT_SYSCTL
+# in its defaults. Empty when none is named.
+fw_ufw_sysctl_file() { fw_ufw_default IPT_SYSCTL; }
 
 # True when an nft input hook (ruleset on stdin) can drop: a drop/reject policy
 # or verdict, a queue, or a jump into a chain; fail2ban, ufw (emptied while off)

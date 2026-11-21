@@ -487,8 +487,16 @@ _ssh_audit_root_login() {
             fix="ssh.disable_root_login"
         print_severity "$sev" "$(i18n "$title_key")"
     else
-        check_emit "ssh.root_login_disabled" low passed
-        print_ok "$(i18n 'ssh.root_login_disabled')"
+        # Only "no" keeps root out: prohibit-password (which sshd -T prints as
+        # without-password) and forced-commands-only still let root in by key.
+        local value title
+        value=$(_ssh_get_config "PermitRootLogin" "prohibit-password")
+        title=$(i18n 'ssh.root_login_key_only')
+        [[ "${value,,}" == no ]] && title=$(i18n 'ssh.root_login_disabled')
+        check_emit "ssh.root_login_disabled" low passed \
+            title="$title" \
+            desc="PermitRootLogin=$value"
+        print_ok "$title"
     fi
 }
 

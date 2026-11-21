@@ -1,0 +1,12 @@
+# Mutation cases: tests/test_update_origin_gaps.bats against modules/networking.sh.
+# mutate-suite: modules/networking.sh tests/test_update_origin_gaps.bats
+#
+# The pid each public listener carries, which update.sh follows to its package.
+
+run_case "pid/not-read-from-ss" 1 \
+    '            pid="${BASH_REMATCH[3]}"' \
+    '            :'
+
+run_case "pid/not-passed-on" 1 \
+    "        printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"\$proto\" \"\$port\" \"\$addr\" \"\$proc\" \"\$pid\"" \
+    "        printf '%s\\t%s\\t%s\\t%s\\n' \"\$proto\" \"\$port\" \"\$addr\" \"\$proc\""

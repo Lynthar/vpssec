@@ -24,7 +24,7 @@ run_case "bans/no-action-bans" 1 \
     '    :'
 
 run_case "bans/missing-tool-ignored" 1 \
-    '        check_command "$tool" || return 1' \
+    '        check_command "$tool" || return 2' \
     '        :'
 
 run_case "bans/iptables-family-unchecked" 1 \
@@ -39,8 +39,8 @@ run_case "bans/header-read-as-action" 1 \
 
 # A jail on port ssh bans no one at an sshd that listens elsewhere.
 run_case "bans/ports-unchecked" 1 \
-    '        _f2b_action_covers_ssh "$jail" "$a" || return 1' \
-    '        :'
+    '        if ! _f2b_action_covers_ssh "$jail" "$a" "$dump"; then' \
+    '        if false; then'
 
 run_case "ports/uncovered-ignored" 1 \
     '        (( covered )) || return 1' \
@@ -75,19 +75,37 @@ run_case "covers/allports-name-ignored" 1 \
     '    [[ "$2" == ufw* || "$2" == *allports* ]] && return 0' \
     '    [[ "$2" == ufw* ]] && return 0'
 
-# A firewall action with no port attribute is not judged.
-run_case "covers/no-port-attribute-fails" 1 \
-    '    ports=$(fail2ban-client get "$1" action "$2" port 2>/dev/null) || return 0' \
-    '    ports=$(fail2ban-client get "$1" action "$2" port 2>/dev/null) || return 1'
+# A firewall action with no port option is not judged.
+run_case "covers/no-port-option-fails" 1 \
+    '    ports=$(_f2b_action_option "$1" "$2" port "$3") || return 0' \
+    '    ports=$(_f2b_action_option "$1" "$2" port "$3") || return 1'
 
 run_case "covers/port-list-ignored" 1 \
     '    _f2b_port_list_covers "$ports" && return 0' \
     '    :'
 
 run_case "covers/type-allports-ignored" 1 \
-    '    [[ "$(fail2ban-client get "$1" action "$2" type 2>/dev/null)" == allports ]] ||' \
+    '    [[ "$(_f2b_action_option "$1" "$2" type "$3")" == allports ]] ||' \
     '    false ||'
 
 run_case "covers/actiontype-allports-ignored" 1 \
-    '        [[ "$(fail2ban-client get "$1" action "$2" actiontype 2>/dev/null)" == "<allports>" ]]' \
+    '        [[ "$(_f2b_action_option "$1" "$2" actiontype "$3")" == "<allports>" ]]' \
     '        false'
+
+# Back to asking the server: an option the action lacks logs an ERROR there.
+run_case "dump/server-asked" 1 \
+    '        [[ -n "$dump" ]] || dump=$(fail2ban-client -d 2>/dev/null) || dump=""' \
+    '        dump=""'
+
+# Another action's option, or one of an action of the same name in another jail.
+run_case "dump/any-line-read" 1 \
+    "        index(\$0, \"[\" q \"multi-set\" q \", \" q ENVIRON[\"J\"] q \", \" q \"action\" q \", \" q ENVIRON[\"A\"] q \", [\") == 1 {" \
+    '        {'
+
+run_case "gap/action-unnamed" 1 \
+    "        F2B_GAP=\"\$a\"\$'\\t'\"\$tool\"" \
+    '        F2B_GAP=""'
+
+run_case "gap/kept-after-a-pass" 1 \
+    '    F2B_GAP=""' \
+    '    :'

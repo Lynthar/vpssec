@@ -5,11 +5,7 @@
 
 # Back to trusting the name: a renamed process is exempt anywhere, and
 # socket-activated sshd (owned by systemd) is flagged.
-run_case "ssh/exempt-by-name-wildcard" 1 \
-    '        [[ "$proto" == tcp* && "$ssh_ports" == *" $port "* ]] && continue' \
-    '        [[ "$proc" == sshd ]] && continue'
-
-run_case "ssh/exempt-by-name-specific" 2 \
+run_case "ssh/exempt-by-name" 1 \
     '        [[ "$proto" == tcp* && "$ssh_ports" == *" $port "* ]] && continue' \
     '        [[ "$proc" == sshd ]] && continue'
 
@@ -24,5 +20,5 @@ run_case "ssh/ports-not-read" 1 \
 
 # The name cut at its first quote, as the old regex did: sshd"x reads as sshd.
 run_case "proc/name-cut-at-quote" 1 \
-    '        if _net_have_ss && [[ "$line" =~ users:\(\(\"(([^\"]|\"[^,])+)\",pid= ]]; then' \
-    '        if _net_have_ss && [[ "$line" =~ users:\(\(\"([^\"]+)\" ]]; then'
+    '        if _net_have_ss && [[ "$line" =~ users:\(\(\"(([^\"]|\"[^,])+)\",pid=([0-9]+) ]]; then' \
+    '        if _net_have_ss && [[ "$line" =~ users:\(\(\"([^\"]+)\"(,pid=([0-9]+))? ]]; then'

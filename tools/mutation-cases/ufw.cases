@@ -131,3 +131,44 @@ run_case "enable/sysctl-not-aligned" 1 \
 run_case "enable/sysctl-align-failure-unsaid" 1 \
     "    (( aligned )) || print_warn \"\$(i18n 'ufw.sysctl_not_aligned')\"" \
     '    :'
+
+# The public listeners default-deny cuts off. Read after the rescue rule, which
+# admits every port from the operator's address, the list comes out empty.
+run_case "enable/listeners-read-after-rescue" 1 \
+    '    _ufw_say_cut_off "$cut_off" "$cut_rc"' \
+    '    _ufw_say_cut_off "$(_ufw_unadmitted_listeners)" 0'
+
+run_case "listeners/unsaid" 1 \
+    "        sed 's/^/  /' <<< \"\$1\" | tty_out" \
+    '        :'
+
+run_case "enable/policy-ignored" 1 \
+    '    if _ufw_input_policy_drops; then' \
+    '    if true; then'
+
+# Occurrence 2: set_default_deny, which used to leave its prompt to the engine's
+# generic line, naming nothing a deny-all flip cuts off.
+run_case "default-deny/listeners-unsaid" 2 \
+    '    _ufw_say_cut_off "$cut_off" "$cut_rc"' \
+    '    :'
+
+run_case "default-deny/not-confirmed" 1 \
+    "    if ! confirm_critical \"\$(i18n 'ufw.confirm_default_deny')\"; then" \
+    '    if false; then'
+
+run_case "listeners/list-failure-reads-none" 1 \
+    '    listeners=$(_net_list_listeners) || return 1' \
+    '    listeners=$(_net_list_listeners) || return 0'
+
+run_case "listeners/dhcp-client-named" 1 \
+    '        [[ "${proto%6}/$port" == udp/68 || "${proto%6}/$port" == udp/546 ]] && continue' \
+    '        [[ "${proto%6}/$port" == udp/546 ]] && continue'
+
+run_case "listeners/docker-proxy-named" 1 \
+    '        [[ "$proc" == docker-proxy ]] && continue' \
+    '        :'
+
+# A TCP rule read as letting in the UDP listener on the same port.
+run_case "listeners/protocol-ignored" 1 \
+    '        _ufw_admits_port "$port" any "${proto%6}" && continue' \
+    '        _ufw_admits_port "$port" any && continue'

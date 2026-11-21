@@ -1,0 +1,16 @@
+Package files:
+ 100 /var/lib/dpkg/status
+     release a=now
+ 900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     release v=13.0,o=nginx,a=stable,n=trixie,l=nginx,c=nginx,b=arm64
+     origin nginx.org
+ 500 http://deb.debian.org/debian-security trixie-security/main arm64 Packages
+     release v=13,o=Debian,a=stable-security,n=trixie-security,l=Debian-Security,c=main,b=arm64
+     origin deb.debian.org
+ 500 http://deb.debian.org/debian trixie-updates/main arm64 Packages
+     release v=13-updates,o=Debian,a=stable-updates,n=trixie-updates,l=Debian,c=main,b=arm64
+     origin deb.debian.org
+ 500 http://deb.debian.org/debian trixie/main arm64 Packages
+     release v=13.8,o=Debian,a=stable,n=trixie,l=Debian,c=main,b=arm64
+     origin deb.debian.org
+Pinned packages:

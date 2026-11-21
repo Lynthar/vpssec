@@ -274,8 +274,8 @@ run_case "reach/pcre-only-judged" 1 \
     '            if (0) return 2'
 
 run_case "reach/server-level-dropped" 1 \
-    '                BLOCK = !passes((s in own), mode)' \
-    '                BLOCK = 0'
+    '                BLOCK = !passes((s in own), mode); UNSURE = 0' \
+    '                BLOCK = 0; UNSURE = 0'
 
 run_case "reach/locations-not-searched" 1 \
     '                slash(s, 0, mode)' \
@@ -311,3 +311,31 @@ run_case "backup/overlap-reported-twice" 1 \
 run_case "headers/verify-passes-unseen" 1 \
     '            grep -q $'"'"'^ok\t'"'"' <<<"$results"' \
     '            true'
+
+# ---- a regex location awk cannot read, and two servers by one name ----------
+
+# Proxy-agent's ^/s/(?<key>...)$ read as possibly serving /: its add_header made
+# the site "own" and took the http{} fix away.
+run_case "rx/literal-start-ignored" 1 \
+    '            if (p != "" && index("/", p) != 1) return 0' \
+    '            p = p'
+
+run_case "lead/quantifier-ignored" 1 \
+    '            if (i <= n && index("*?{", c)) out = substr(out, 1, length(out) - 1)' \
+    '            n = n'
+
+run_case "lead/alternation-ignored" 1 \
+    '                else if (c == "|" && !depth) return ""' \
+    '                else if (0) return ""'
+
+run_case "unsure/read-as-own" 1 \
+    '                if (BLOCK && !b) { UNSURE = 1; BLOCK = 0 }' \
+    '                b = b'
+
+run_case "unsure/unsaid" 1 \
+    '                if (UNSURE && !BLOCK) { print "unchecked\t" label "\tregex"; continue }' \
+    '                UNSURE = 0'
+
+run_case "name/duplicates-unlabelled" 1 \
+    '                else if (named[label] > 1) label = label " (" w[1] ")"' \
+    '                else label = label'

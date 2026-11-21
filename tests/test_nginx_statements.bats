@@ -61,6 +61,15 @@ _stmts() {
 1|http/server|listen|80' ]
 }
 
+@test "statements: an if gets a line with its condition, before what is inside it" {
+    run _stmts 'http { server { if ($http_host !~* "^a\.example(:80)?$") { return 444; } location / { if ($x) { return 403; } } } }'
+    [ "$output" = '1|http/server|if|($http_host !~* ^a.example(:80)?$ )
+1|http/server/if|return|444
+1|http/server|location|/|1
+1|http/server/location|if|($x)|1
+1|http/server/location/if|return|403|1' ]
+}
+
 @test "statements: \${var} is a variable, not a block" {
     run _stmts 'http { server { set $a "${host}x"; set $b ${host}; listen 82; } }'
     grep -qxF '1|http/server|set|$b ${host}' <<<"$output"

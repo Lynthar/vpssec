@@ -1,0 +1,54 @@
+nginx:
+  Installed: 1.31.9-1~trixie
+  Candidate: 1.31.9-1~trixie
+  Version table:
+ *** 1.31.9-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+        100 /var/lib/dpkg/status
+     1.31.8-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.31.7-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.31.6-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.31.5-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.31.4-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.31.3-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.31.2-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.31.1-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.31.0-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.29.8-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.29.7-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.29.6-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.29.5-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.29.4-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.29.3-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.29.2-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.29.1-1~trixie 900
+        900 http://nginx.org/packages/mainline/debian trixie/nginx arm64 Packages
+     1.26.3-3+deb13u11 500
+        500 http://deb.debian.org/debian-security trixie-security/main arm64 Packages
+     1.26.3-3+deb13u10 500
+        500 http://deb.debian.org/debian trixie/main arm64 Packages
+openssh-server:
+  Installed: 1:10.0p1-7+deb13u4
+  Candidate: 1:10.0p1-7+deb13u4
+  Version table:
+ *** 1:10.0p1-7+deb13u4 500
+        500 http://deb.debian.org/debian trixie/main arm64 Packages
+        100 /var/lib/dpkg/status
+     1:10.0p1-7+deb13u2 500
+        500 http://deb.debian.org/debian-security trixie-security/main arm64 Packages

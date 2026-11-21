@@ -53,3 +53,8 @@ run_case "dump/cache-ignored" 1 \
 run_case "dump/error-dropped" 1 \
     '    NGINX_DUMP_ERROR=$(nginx -t 2>&1 | awk '"'"'/\[(emerg|alert|crit)\]/ { print; exit }'"'"') || true' \
     '    NGINX_DUMP_ERROR=""'
+
+# An if{} without its own line: the condition a catchall's Host test sits in is lost.
+run_case "if/no-line" 1 \
+    '                        } else if (names[depth] == "if") statement(toks, nt, depth - 1)' \
+    '                        }'

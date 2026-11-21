@@ -361,7 +361,7 @@ SH
         [ "$(cat "$BATS_TEST_TMPDIR/ran")" = "$id" ]
     done <<'EOF'
 update.apply_security confirm_critical
-ufw.set_default_deny confirm_critical
+ufw.set_default_deny -
 ssh.harden_algorithms confirm
 ssh.disable_empty_password -
 ssh.disable_password_auth -

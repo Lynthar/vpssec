@@ -23,3 +23,12 @@ run_case "config/failure-reads-as-answer" 1 \
 run_case "algorithms/unknown-reads-clean" 1 \
     '    weak=$(_ssh_weak_algorithms) || return 1' \
     '    weak=$(_ssh_weak_algorithms) || weak=""'
+
+# The root-login pass: prohibit-password said "disabled" while root logs in by key.
+run_case "root-login/key-only-said-disabled" 1 \
+    "        [[ \"\${value,,}\" == no ]] && title=\$(i18n 'ssh.root_login_disabled')" \
+    "        title=\$(i18n 'ssh.root_login_disabled')"
+
+run_case "root-login/value-unnamed" 1 \
+    '            desc="PermitRootLogin=$value"' \
+    '            desc=""'

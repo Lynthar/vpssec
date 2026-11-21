@@ -1,8 +1,8 @@
 # Plant: as 152 — ufw enabled with SSH allowed and the incoming policy set to allow.
-# Expect: ufw.default_accept; ufw.set_default_deny is RISKY, the engine asks on the
-# terminal and the answer is no (FIX_TTY_ANSWERS). A declined fix is a skip: guide
-# exits 0, the policy stays allow, no session and no undo command (EXPECT_DECLINED).
-# If the engine stopped asking (--yes reaching a risky fix), the fix would land here.
+# Expect: ufw.default_accept; ufw.set_default_deny is RISKY, it asks on the terminal
+# and the answer is no (FIX_TTY_ANSWERS). A declined fix is a skip: guide exits 0, the
+# policy stays allow, no session and no undo command (EXPECT_DECLINED).
+# If its prompt went (--yes reaching a risky fix), the fix would land here.
 TEST_DESC="ufw default incoming allow: answering no at ufw.set_default_deny's prompt changes nothing and guide exits 0"
 EXPECT_ID="ufw.default_accept"
 EXPECT_STATUS="failed"

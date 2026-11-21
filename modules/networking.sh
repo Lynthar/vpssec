@@ -47,7 +47,7 @@ declare -ga NET_PUBLIC_PORTS_OK=(
 
 _net_have_ss() { command -v ss >/dev/null 2>&1; }
 
-# Emit TSV: proto, family, ip, port, process per listening socket; fails
+# Emit TSV: proto, family, ip, port, process, pid per listening socket; fails
 # when no tool could list them, which is not "nothing listens". Prefers
 # `ss -tulnpH`, falling back to netstat. The family field keys the checks.
 _net_list_listeners() {
@@ -70,7 +70,7 @@ _net_list_listeners() {
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
 
-        local proto local_addr proc=""
+        local proto local_addr proc="" pid=""
         # Both ss and netstat list proto in column 1.
         proto=$(awk '{print $1}' <<< "$line")
 
@@ -94,16 +94,22 @@ _net_list_listeners() {
         local family="v4"
         [[ "$ip" == *:* || "$ip" == "*" && "$proto" == *6 ]] && family="v6"
 
-        # Extract process name. ss emits users:(("name",pid=N,fd=N));
-        # netstat emits pid/name as last column.
-        # A name may itself hold a quote (comm is settable): it ends at `",pid=`.
-        if _net_have_ss && [[ "$line" =~ users:\(\(\"(([^\"]|\"[^,])+)\",pid= ]]; then
+        # ss: users:(("name",pid=N,fd=N)), a name may hold a quote (comm is settable)
+        # and ends at `",pid=`; netstat: pid/name, last. Name and pid are known or empty
+        # together: neither is ever a blank middle field, which a tab-split read skips.
+        if _net_have_ss && [[ "$line" =~ users:\(\(\"(([^\"]|\"[^,])+)\",pid=([0-9]+) ]]; then
             proc="${BASH_REMATCH[1]}"
+            pid="${BASH_REMATCH[3]}"
         elif ! _net_have_ss; then
-            proc=$(awk '{print $NF}' <<< "$line" | sed 's|.*/||;s|^-$||')
+            proc=$(awk '{print $NF}' <<< "$line")
+            if [[ "$proc" =~ ^([0-9]+)/(.+)$ ]]; then
+                pid="${BASH_REMATCH[1]}" proc="${BASH_REMATCH[2]}"
+            else
+                proc=""
+            fi
         fi
 
-        printf '%s\t%s\t%s\t%s\t%s\n' "$proto" "$family" "$ip" "$port" "$proc"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$proto" "$family" "$ip" "$port" "$proc" "$pid"
     done <<< "$raw"
 }
 
@@ -150,6 +156,38 @@ _net_specific_addr_is_public() {
             ;;
     esac
     return 1
+}
+
+# Listeners reachable from off-host from _net_list_listeners rows on stdin, deduplicated
+# (ss lists a dual-stack bind per family), a TSV row each: proto, port, address ("*" for
+# a wildcard bind), process, pid (both empty when unknown).
+_net_public_listeners() {
+    local -A seen=()
+    local proto family ip port proc pid addr key
+    while IFS=$'\t' read -r proto family ip port proc pid; do
+        [[ -n "$port" ]] || continue
+        case "$(_net_classify_addr "$family" "$ip")" in
+            wildcard) addr="*" ;;
+            specific)
+                # A service on the VPS's own public IP is as exposed as a wildcard.
+                _net_specific_addr_is_public "$family" "$ip" || continue
+                addr="$ip"
+                ;;
+            *) continue ;;
+        esac
+        key="$proto/$port/$addr/$proc"
+        [[ -n "${seen[$key]:-}" ]] && continue
+        seen[$key]=1
+        printf '%s\t%s\t%s\t%s\t%s\n' "$proto" "$port" "$addr" "$proc" "$pid"
+    done
+}
+
+# A public listener as findings name it: proto/port, @address unless the bind
+# is a wildcard, then the process when known.
+_net_listener_label() {
+    local at="@$3"
+    [[ "$3" == "*" ]] && at=""
+    printf '%s/%s%s%s\n' "$1" "$2" "$at" "${4:+ ($4)}"
 }
 
 _net_port_in() {
@@ -201,83 +239,30 @@ _net_audit_listeners() {
         return
     fi
 
-    # Collapse (proto, port, proc) into a set: ss emits one row per address
-    # family, so raw iteration double-counts every dual-stack listener.
-    # Wildcard beats loopback when both are seen — worst case wins.
-    local -A wildcard_set loopback_only_set specific_public_set
-    local loopback_only=1
-    local proto family ip port proc class key
-    while IFS=$'\t' read -r proto family ip port proc; do
-        [[ -z "$port" ]] && continue
-        class=$(_net_classify_addr "$family" "$ip")
-        key="${proto}/${port}/${proc:-?}"
-        case "$class" in
-            loopback)
-                # Only record as loopback-only if not already marked
-                # wildcard. Otherwise leave the wildcard entry alone.
-                [[ -z "${wildcard_set[$key]:-}" ]] && loopback_only_set["$key"]=1
-                ;;
-            wildcard)
-                loopback_only=0
-                wildcard_set["$key"]=1
-                # If we had previously logged it as loopback, promote.
-                unset 'loopback_only_set[$key]' 2>/dev/null || true
-                ;;
-            specific)
-                loopback_only=0
-                # A public specific bind gets the same scrutiny as a
-                # wildcard one, and carries the address so the finding
-                # can name it.
-                if _net_specific_addr_is_public "$family" "$ip"; then
-                    specific_public_set["${proto}/${port}/${ip}/${proc:-?}"]=1
-                fi
-                ;;
-        esac
+    # Every socket on loopback: the pass says so rather than "nothing exposed".
+    local loopback_only=1 proto family ip port proc pid
+    while IFS=$'\t' read -r proto family ip port proc pid; do
+        [[ -n "$port" && "$(_net_classify_addr "$family" "$ip")" != loopback ]] || continue
+        loopback_only=0
+        break
     done <<< "$listeners"
 
-    # Second pass: classify deduplicated wildcard listeners.
     local ssh_ports=" $(get_ssh_ports | tr '\n' ' ')"
-    local dangerous=()  # known-bad ports on wildcard
-    local exposed=()    # any other non-whitelisted port/proc on wildcard
-
-    for key in "${!wildcard_set[@]}"; do
-        proto="${key%%/*}"
-        local rest="${key#*/}"
-        port="${rest%%/*}"
-        proc="${rest#*/}"
-        [[ "$proc" == "?" ]] && proc=""
-
+    local dangerous=()  # known-bad ports on a public address
+    local exposed=()    # any other non-whitelisted port/proc on one
+    local addr label
+    while IFS=$'\t' read -r proto port addr proc pid; do
         # A port sshd listens on is SSH, wherever ssh.sh approved moving it.
         # Never by process name: any local user can set one, `sshd` included.
         [[ "$proto" == tcp* && "$ssh_ports" == *" $port "* ]] && continue
 
+        label=$(_net_listener_label "$proto" "$port" "$addr" "$proc")
         if _net_port_in "$port" "${NET_DANGEROUS_PUBLIC_PORTS[@]}"; then
-            dangerous+=("${proto}/${port}${proc:+ ($proc)}")
+            dangerous+=("$label")
         elif ! _net_port_in "$port" "${NET_PUBLIC_PORTS_OK[@]}"; then
-            exposed+=("${proto}/${port}${proc:+ ($proc)}")
+            exposed+=("$label")
         fi
-    done
-
-    # Same classification for public-specific binds; the label carries the
-    # bound address so the operator can see WHICH interface is exposed.
-    local addr
-    for key in ${specific_public_set[@]+"${!specific_public_set[@]}"}; do
-        proto="${key%%/*}"
-        local rest="${key#*/}"
-        port="${rest%%/*}"
-        rest="${rest#*/}"
-        addr="${rest%/*}"
-        proc="${rest##*/}"
-        [[ "$proc" == "?" ]] && proc=""
-
-        [[ "$proto" == tcp* && "$ssh_ports" == *" $port "* ]] && continue
-
-        if _net_port_in "$port" "${NET_DANGEROUS_PUBLIC_PORTS[@]}"; then
-            dangerous+=("${proto}/${port}@${addr}${proc:+ ($proc)}")
-        elif ! _net_port_in "$port" "${NET_PUBLIC_PORTS_OK[@]}"; then
-            exposed+=("${proto}/${port}@${addr}${proc:+ ($proc)}")
-        fi
-    done
+    done < <(_net_public_listeners <<< "$listeners")
 
     if (( ${#dangerous[@]} > 0 )); then
         local list; list=$(printf '%s ' "${dangerous[@]}")

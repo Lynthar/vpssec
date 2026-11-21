@@ -190,11 +190,9 @@ setup() {
 # decide whether to prompt. True for every confirm/risky fix except those that
 # confirm themselves (FIX_SELF_CONFIRMED), false for safe and alert-only.
 
-@test "fix_needs_engine_confirmation: risky non-self-confirming fix is gated by the engine (ufw.set_default_deny)" {
-    # ufw.set_default_deny is RISKY (confirm_critical, ignores --yes) and not
-    # self-confirmed, so the engine MUST gate it.
+@test "fix_needs_engine_confirmation: ufw.set_default_deny asks itself, after naming what it cuts off" {
     run fix_needs_engine_confirmation "ufw.set_default_deny"
-    [ "$status" -eq 0 ]
+    [ "$status" -ne 0 ]
 }
 
 @test "fix_needs_engine_confirmation: risky non-self-confirming fix is gated by the engine" {
@@ -240,10 +238,10 @@ setup() {
     done
 }
 
-@test "FIX_SELF_CONFIRMED: the four known self-confirming fixes are present" {
+@test "FIX_SELF_CONFIRMED: the five known self-confirming fixes are present" {
     local id
     for id in ssh.disable_password_auth ssh.disable_root_login \
-              ufw.enable docker.enable_no_new_privileges; do
+              ufw.enable ufw.set_default_deny docker.enable_no_new_privileges; do
         [[ -n "${FIX_SELF_CONFIRMED[$id]:-}" ]] || {
             printf 'expected %s in FIX_SELF_CONFIRMED\n' "$id" >&2
             return 1

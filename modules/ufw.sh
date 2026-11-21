@@ -51,22 +51,22 @@ _ufw_rule_files() {
     return 0
 }
 
-# Is TCP port $1 let in by an inbound ALLOW/LIMIT rule? Never OUT, routed or
-# DENY: outbound read as inbound is a lockout. $2 "any" (default) counts rules
-# confined to an interface or source; "open" only rules from anywhere.
+# Is port $1 let in by an inbound ALLOW/LIMIT rule? Never OUT, routed or DENY:
+# outbound read as inbound is a lockout. $2 "any" (default) counts rules confined
+# to an interface or source; "open" only rules from anywhere. $3: tcp or udp.
 _ufw_admits_port() {
-    local port="$1" scope="${2:-any}"
+    local port="$1" scope="${2:-any}" proto="${3:-tcp}"
     local -a files=()
     mapfile -t files < <(_ufw_rule_files)
     (( ${#files[@]} > 0 )) || return 1
-    awk -v p="$port" -v scope="$scope" '
+    awk -v p="$port" -v scope="$scope" -v proto="$proto" '
         function wild(a) { return a == "0.0.0.0/0" || a == "::/0" }
         $1 == "###" && $2 == "tuple" && $3 == "###" {
             n = NF
             if ($n ~ /^comment=/) n--
             if ($4 != "allow" && $4 != "limit") next
             if ($n !~ /^in(_|$)/) next
-            if ($5 != "tcp" && $5 != "any") next
+            if ($5 != proto && $5 != "any") next
             if (scope == "open" && ($n != "in" || !wild($7) || !wild($9))) next
             if ($6 == "any") { hit = 1; exit }
             k = split($6, items, ",")
@@ -523,6 +523,43 @@ _ufw_allow_ssh_ports() {
     done
 }
 
+# Does ufw drop inbound traffic no rule admits once it is enabled? Its defaults
+# file says: an inactive ufw's `status verbose` prints no policy. Unset is the
+# DROP ufw ships.
+_ufw_input_policy_drops() {
+    [[ "$(fw_ufw_default DEFAULT_INPUT_POLICY)" != ACCEPT ]]
+}
+
+# Public listeners no inbound rule admits, a label per line: what a deny policy cuts off;
+# fails when sockets cannot be listed. Not the DHCP client ports before.rules admits, nor
+# docker-proxy, whose published ports are DNAT-forwarded past ufw's input chain.
+_ufw_unadmitted_listeners() {
+    if [[ "${VPSSEC_MODULE_LOADED[networking]:-0}" != 1 ]]; then
+        module_load networking || return 1
+    fi
+    local listeners
+    listeners=$(_net_list_listeners) || return 1
+
+    local proto port addr proc pid
+    while IFS=$'\t' read -r proto port addr proc pid; do
+        [[ "${proto%6}/$port" == udp/68 || "${proto%6}/$port" == udp/546 ]] && continue
+        [[ "$proc" == docker-proxy ]] && continue
+        _ufw_admits_port "$port" any "${proto%6}" && continue
+        _net_listener_label "$proto" "$port" "$addr" "$proc"
+    done < <(_net_public_listeners <<< "$listeners")
+}
+
+# Named before the confirmation, never opened on the operator's behalf: which to
+# serve is theirs. $1 is what _ufw_unadmitted_listeners printed, $2 its status.
+_ufw_say_cut_off() {
+    if (( $2 )); then
+        tty_warn "$(i18n 'ufw.listeners_unknown')"
+    elif [[ -n "$1" ]]; then
+        tty_warn "$(i18n 'ufw.listeners_cut_off')"
+        sed 's/^/  /' <<< "$1" | tty_out
+    fi
+}
+
 _ufw_fix_enable() {
     local current_ip=$(get_current_ssh_ip)
     local -a undo=()
@@ -533,6 +570,12 @@ _ufw_fix_enable() {
     if ! _ufw_allow_ssh_ports undo < <(_ufw_ssh_ports_unopened); then
         _ufw_run_undo "${undo[@]}"
         return 1
+    fi
+
+    # Read before the rescue rule exists: it admits every port from one address.
+    local cut_off="" cut_rc=0
+    if _ufw_input_policy_drops; then
+        cut_off=$(_ufw_unadmitted_listeners) || cut_rc=$?
     fi
 
     # Second safety net behind the port rules above. Its failure does not
@@ -556,6 +599,8 @@ _ufw_fix_enable() {
     tty_say ""
     tty_warn "$(i18n 'ufw.current_rules')"
     LC_ALL=C ufw show added 2>/dev/null | head -20 | tty_out
+
+    _ufw_say_cut_off "$cut_off" "$cut_rc"
 
     if ! confirm_critical "$(i18n 'ufw.confirm_ufw_enable')"; then
         _ufw_run_undo "${undo[@]}"
@@ -608,6 +653,15 @@ _ufw_fix_default_deny() {
     # Every sshd port must be open to anywhere before flipping to deny-all, or
     # the policy cuts the next login. Abort on any failure BEFORE the flip.
     if ! _ufw_allow_ssh_ports undo < <(_ufw_ssh_ports_unopened); then
+        _ufw_run_undo "${undo[@]}"
+        return 1
+    fi
+
+    # What the flip cuts off is what the confirmation is about, as for ufw.enable.
+    local cut_off cut_rc=0
+    cut_off=$(_ufw_unadmitted_listeners) || cut_rc=$?
+    _ufw_say_cut_off "$cut_off" "$cut_rc"
+    if ! confirm_critical "$(i18n 'ufw.confirm_default_deny')"; then
         _ufw_run_undo "${undo[@]}"
         return 1
     fi

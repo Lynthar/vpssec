@@ -114,13 +114,20 @@ _logging_kernel_audit_off() {
     return 1
 }
 
+# Does auditd have a rule? A line of rules.d that adds one (-a, -A, -w): the
+# distro's own audit.rules holds only control lines (-D -b -f …). While auditd
+# runs, an empty kernel set ("No rules") is none, whatever the files say.
 _logging_check_audit_rules() {
-    if [[ -d "$AUDIT_RULES_D" ]]; then
-        local rule_count=$(find "$AUDIT_RULES_D" -name "*.rules" -type f 2>/dev/null | wc -l)
-        [[ "$rule_count" -gt 0 ]]
-    else
-        return 1
-    fi
+    [[ -d "$AUDIT_RULES_D" ]] || return 1
+    local -a files=()
+    mapfile -t files < <(find "$AUDIT_RULES_D" -name "*.rules" -type f 2>/dev/null)
+    (( ${#files[@]} )) || return 1
+    awk '$1 == "-a" || $1 == "-A" || $1 == "-w" { found = 1; exit } END { exit !found }' \
+        "${files[@]}" 2>/dev/null || return 1
+    _logging_auditd_active || return 0
+    local loaded
+    loaded=$(auditctl -l 2>/dev/null) || return 0
+    [[ "$loaded" != "No rules" ]]
 }
 
 # journalctl's output for the matches in "$@" over the last 24 hours (count

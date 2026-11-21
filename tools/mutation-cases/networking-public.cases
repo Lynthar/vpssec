@@ -6,8 +6,8 @@
 # Drop specific-public tracking entirely (the pre-2026-08 behavior: the
 # `specific` class was discarded with an "operator context" comment).
 run_case "netpub/tracking-removed" 1 \
-    "                if _net_specific_addr_is_public \"\$family\" \"\$ip\"; then" \
-    "                if false; then"
+    '                _net_specific_addr_is_public "$family" "$ip" || continue' \
+    '                continue'
 
 # Widen the 172.16/12 private range to 172.16/10: 172.32.x — a public
 # range — would silently join the never-flagged bucket.

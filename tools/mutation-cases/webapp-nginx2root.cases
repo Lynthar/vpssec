@@ -1,0 +1,75 @@
+# Mutation cases: tests/test_webapp_nginx2root.bats against modules/webapp.sh.
+# mutate-suite: modules/webapp.sh tests/test_webapp_nginx2root.bats
+#
+# The nginx2root note: an upstream-unfixed version, and only the CVEs whose
+# feature the configuration turns on.
+
+run_case "audit/not-asked" 1 \
+    '    _webapp_audit_nginx2root' \
+    '    :'
+
+# Occurrence 2: php2shell's version test above ends with the same line.
+run_case "versions/branch-fix-ignored" 2 \
+    '    [[ -n "$fixed" ]] && return $(( patch < fixed ? 0 : 1 ))' \
+    '    :'
+
+run_case "versions/older-branches-safe" 1 \
+    '    (( major < 1 || (major == 1 && minor < 31) ))' \
+    '    false'
+
+run_case "versions/fork-numbering-read" 1 \
+    '    [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1' \
+    '    [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1'
+
+run_case "version/fork-read-as-nginx" 1 \
+    "    nginx -v 2>&1 | sed -n 's|^nginx version: nginx/\\([0-9][0-9.]*\\).*|\\1|p'" \
+    "    nginx -v 2>&1 | sed -n 's|^nginx version: [a-z]*/\\([0-9][0-9.]*\\).*|\\1|p'"
+
+run_case "features/http2-listen-ignored" 1 \
+    '            if (($3 == "http2" && $4 == "on") || ($3 == "listen" && (" " $4 " ") ~ / http2 /)) h2 = 1' \
+    '            if ($3 == "http2" && $4 == "on") h2 = 1'
+
+run_case "features/http2-off-read-as-on" 1 \
+    '            if (($3 == "http2" && $4 == "on") || ($3 == "listen" && (" " $4 " ") ~ / http2 /)) h2 = 1' \
+    '            if ($3 == "http2" || ($3 == "listen" && (" " $4 " ") ~ / http2 /)) h2 = 1'
+
+run_case "features/backend-not-required" 1 \
+    '            if (h2 && up) print "http2_proxy"' \
+    '            if (h2) print "http2_proxy"'
+
+run_case "features/quic-ignored" 1 \
+    '            if ($3 == "listen" && (" " $4 " ") ~ / quic /) h3 = 1' \
+    '            h3 = h3'
+
+run_case "features/mirror-off-read-as-on" 1 \
+    '            if (($3 == "mirror" && $4 != "off") || ($3 == "ssi" && $4 == "on")) subreq = 1' \
+    '            if ($3 == "mirror" || ($3 == "ssi" && $4 == "on")) subreq = 1'
+
+run_case "features/ssi-ignored" 1 \
+    '            if (($3 == "mirror" && $4 != "off") || ($3 == "ssi" && $4 == "on")) subreq = 1' \
+    '            if ($3 == "mirror" && $4 != "off") subreq = 1'
+
+run_case "features/resolver-not-required" 1 \
+    '            if (res && var && subreq) print "subrequest"' \
+    '            if (var && subreq) print "subrequest"'
+
+run_case "features/mail-ignored" 1 \
+    '        $2 ~ /^mail(\/|$)/ { mail = 1 }' \
+    '        $2 ~ /^never(\/|$)/ { mail = 1 }'
+
+# Without the first affected release: QUIC on 1.24, which has none, is CVE-2026-121810.
+run_case "cves/first-release-ignored" 1 \
+    "        [[ \"\$(printf '%s\\n' \"\$first\" \"\$v\" | sort -V | head -1)\" == \"\$first\" ]] || continue" \
+    '        :'
+
+run_case "cves/feature-ignored" 1 \
+    '        [[ " ${features[*]} " == *" $feature "* ]] || continue' \
+    '        :'
+
+run_case "stopgaps/repeated" 1 \
+    '        [[ " ${stopgaps[*]} " == *" ${feature%_proxy} "* ]] || stopgaps+=("${feature%_proxy}")' \
+    '        stopgaps+=("${feature%_proxy}")'
+
+run_case "confirm/changelog-unnamed" 1 \
+    '       && hint=$(pkg_changelog_grep_hint "$pkg" "CVE-2026-(${joined%|})"); then' \
+    '       && false; then'

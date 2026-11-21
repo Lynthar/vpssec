@@ -19,12 +19,42 @@ run_case "needrestart/failure-read-as-current" 1 \
     '    (( ksta <= 1 )) && return 1'
 
 run_case "needrestart/current-not-believed" 1 \
-    '                (( rc == 1 )) && return 1' \
-    '                :'
+    '            if (( rc == 2 )); then' \
+    '            if (( rc >= 1 )); then'
 
 run_case "needrestart/kernels-not-named" 1 \
     "                        END {if (c != \"\" && e != \"\" && c != e) print \"kernel: \" c \" → \" e}' <<<\"\$out\"" \
     "                        END {}' <<<\"\$out\""
+
+# Debian's kernel comparison alone: glibc deb13u4 under running sshd and PID 1
+# passed as "no reboot required".
+run_case "core-pkgs/not-asked" 1 \
+    '            out=$(_distro_debian_core_pkgs_pending)' \
+    '            out=""'
+
+run_case "core-pkgs/kernel-answer-dropped" 1 \
+    "            [[ -n \"\$out\" ]] && { printf '%s\\n' \"\$out\"; return 0; }" \
+    "            [[ -n \"\$out\" ]] && { printf '%s\\n' \"\$out\"; return 0; } || return 1"
+
+run_case "core-pkgs/merged-usr-alias-dropped" 1 \
+    '        [[ "$p" =~ ^/usr/(lib|lib64|bin|sbin)/ ]] && q+=("${p#/usr}")' \
+    '        :'
+
+run_case "core-pkgs/any-package" 1 \
+    "        'index(want, \" \" \$0 \" \")'" \
+    "        '1'"
+
+run_case "core-pkgs/arch-kept" 1 \
+    '                         for (i = 1; i <= n; i++) { sub(/:.*/, "", o[i]); if (!seen[o[i]]++) print o[i] } }'"'" \
+    '                         for (i = 1; i <= n; i++) { if (!seen[o[i]]++) print o[i] } }'"'"
+
+run_case "boot-pkgs/not-asked" 1 \
+    '        _distro_pkgs_unpacked_since_boot "${DISTRO_REBOOT_BOOTED_PKGS[@]}"' \
+    '        :'
+
+run_case "boot-pkgs/before-boot-counts" 1 \
+    '            if (( m > boot )); then echo "$p"; break; fi' \
+    '            echo "$p"; break'
 
 run_case "flag/not-read" 1 \
     '            if [[ -f "$DISTRO_REBOOT_FLAG" ]]; then' \

@@ -1,0 +1,13 @@
+# Mutation cases: tests/test_fix_ufw.bats against core/distro.sh.
+# mutate-suite: core/distro.sh tests/test_fix_ufw.bats
+#
+# fw_ufw_default as ufw.enable reads DEFAULT_INPUT_POLICY: the last assignment,
+# never a commented-out one.
+
+run_case "ufw-default/comment-read" 1 \
+    "    K=\"\$1\" awk '\$0 ~ (\"^[ \\t]*\" ENVIRON[\"K\"] \"=\") { v = substr(\$0, index(\$0, \"=\") + 1) }" \
+    "    K=\"\$1\" awk 'index(\$0, ENVIRON[\"K\"] \"=\") { v = substr(\$0, index(\$0, \"=\") + 1) }"
+
+run_case "ufw-default/first-wins" 1 \
+    "    K=\"\$1\" awk '\$0 ~ (\"^[ \\t]*\" ENVIRON[\"K\"] \"=\") { v = substr(\$0, index(\$0, \"=\") + 1) }" \
+    "    K=\"\$1\" awk '\$0 ~ (\"^[ \\t]*\" ENVIRON[\"K\"] \"=\") && v == \"\" { v = substr(\$0, index(\$0, \"=\") + 1) }"

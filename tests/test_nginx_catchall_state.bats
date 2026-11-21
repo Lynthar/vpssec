@@ -148,11 +148,17 @@ server {
 }
 
 @test "catchall: return 444 in ONE block does not propagate to another" {
-    # Cross-block scope check: 80 has default_server but no return 444;
-    # 443 has return 444 but no default_server. Should not aggregate.
+    # Cross-block scope check: 80 has default_server but no return 444; on 443
+    # the 444 is in the second server, not the default. Should not aggregate.
     local cfg='server {
     listen 80 default_server;
     server_name _;
+    root /var/www/html;
+}
+
+server {
+    listen 443 ssl;
+    server_name www.example.com;
     root /var/www/html;
 }
 
@@ -203,9 +209,81 @@ server {
     [ "$output" = "80only" ]
 }
 
-@test "catchall: a server returning 444 without default_server is no catchall" {
-    run _have 'server { listen 80; server_name x.example; return 444; }'
+@test "catchall: a server returning 444 that is not its port's default is no catchall" {
+    run _have 'server { listen 80; server_name www.example; root /srv; }
+server { listen 80; server_name x.example; return 444; }'
     [ "$output" = "none" ]
+    run _have 'server { listen 80; server_name x.example; return 444; }
+server { listen 80 default_server; server_name www.example; root /srv; }'
+    [ "$output" = "none" ]
+}
+
+@test "catchall: with no default_server the first server on the port is its default" {
+    run _have 'server { listen 80; server_name x.example; return 444; }
+server { listen 80; server_name www.example; root /srv; }'
+    [ "$output" = "80only" ]
+    run _have 'server { listen 80 default_server; return 444; }
+server { listen 443 ssl; server_name x.example; return 444; }
+server { listen 443 ssl; server_name www.example; root /srv; }'
+    [ "$output" = "both" ]
+}
+
+@test "catchall: a 444 in a location, beside locations that serve, is no catchall" {
+    # Unknown hosts asking for anything but /.git reach the application.
+    run _have 'http { server { listen 80 default_server;
+    location /.git { return 444; }
+    location / { proxy_pass http://127.0.0.1:3000; } } }'
+    [ "$output" = "none" ]
+    run _have 'http { server { listen 80 default_server;
+    location / { return 444; location /x { return 444; } } } }'
+    [ "$output" = "80only" ]
+    run _have 'http { server { listen 80 default_server;
+    location / { return 444; }
+    location /app { proxy_pass http://127.0.0.1:3000; } } }'
+    [ "$output" = "none" ]
+}
+
+@test "catchall: a location nested or exact on / is not the whole server" {
+    run _have 'http { server { listen 80 default_server; location = / { return 444; } } }'
+    [ "$output" = "none" ]
+    run _have 'http { server { listen 80 default_server; location / { location /a { return 444; } } } }'
+    [ "$output" = "none" ]
+}
+
+@test "catchall: Proxy-agent's port 80, one server answering 444 to any other Host, is covered" {
+    run _nginx_catchall_coverage_from_text 'http { server {
+    listen 80; listen [::]:80;
+    server_name example.com;
+    server_tokens off;
+    if ($http_host !~* "^example\.com(:80)?$") {
+        return 444;
+    }
+    return 301 https://example.com:8443$request_uri;
+} }'
+    [ "$output" = "80 80only" ]
+}
+
+@test "catchall: an if that does not refuse other hosts is no catchall" {
+    run _have 'http { server { listen 80;
+    if ($request_method = POST) { return 444; }
+    root /srv; } }'
+    [ "$output" = "none" ]
+    run _have 'http { server { listen 80;
+    if ($host = bad.example) { return 444; }
+    root /srv; } }'
+    [ "$output" = "none" ]
+    run _have 'http { server { listen 80;
+    if ($host != example.com) { return 301 https://example.com; }
+    if ($request_method = POST) { return 444; }
+    root /srv; } }'
+    [ "$output" = "none" ]
+}
+
+@test "catchall: \$host matched negatively either way counts" {
+    run _have 'http { server { listen 80; if ($host != example.com) { return 444; } } }'
+    [ "$output" = "80only" ]
+    run _have 'http { server { listen 80; if ($host !~ ^(a|b)\.example$) { return 444; } } }'
+    [ "$output" = "80only" ]
 }
 
 @test "coverage: ssl_reject_handshake counts as the 443 catchall" {

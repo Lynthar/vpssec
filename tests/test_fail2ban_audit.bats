@@ -31,3 +31,22 @@ _checks() { jq -r '[.[] | "\(.id) \(.status) \(.fix_id)"] | join(",")' "$VPSSEC_
     [ "$(_checks)" = "fail2ban.ssh_jail_not_banning failed fail2ban.configure_ssh_jail" ]
     [ "${CHECK_SCORE_CATEGORY[fail2ban.ssh_jail_not_banning]}" = "recommended" ]
 }
+
+_desc() { jq -r '.[] | select(.id == "fail2ban.ssh_jail_not_banning") | .desc' "$VPSSEC_STATE/checks.json"; }
+
+@test "audit: the finding names the one reason the jail does not ban" {
+    _f2b_ssh_jail_bans() { return 1; }
+    _f2b_audit_ssh_jail
+    [ "$(_desc)" = "The sshd jail runs, but it has no ban action (a banaction renamed or removed leaves it so). Its banned count is bookkeeping: a banned address still reaches sshd." ]
+
+    state_init
+    _f2b_ssh_jail_bans() { F2B_GAP=$'iptables-multiport\tiptables'; return 2; }
+    _f2b_audit_ssh_jail
+    [[ "$(_desc)" == "The sshd jail runs, but its action iptables-multiport needs iptables, which this host does not have. Its"* ]]
+
+    state_init
+    get_ssh_ports() { printf '22\n35387\n'; }
+    _f2b_ssh_jail_bans() { F2B_GAP=$'nftables\tnft\tssh'; return 3; }
+    _f2b_audit_ssh_jail
+    [[ "$(_desc)" == "The sshd jail runs, but its action nftables blocks only port ssh, and sshd listens on 22,35387. Its"* ]]
+}

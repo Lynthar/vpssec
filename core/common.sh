@@ -657,6 +657,12 @@ check_command() {
     command -v "$1" &>/dev/null
 }
 
+# The path of $1 where check_command finds it, else nothing and 1: a test that
+# makes the command absent makes its path absent too.
+command_path() {
+    check_command "$1" && command -v "$1"
+}
+
 check_required_deps() {
     local missing=()
     local deps=(jq ss systemctl sed awk tar grep curl)
@@ -1673,9 +1679,9 @@ nginx_dump_reset() {
     _NGINX_DUMP_STATE=""
 }
 
-# `nginx -T` text on stdin -> "<server id>\t<context>\t<name>\t<args>" per directive, includes
-# inlined, server ids from 1 (0 = none), context "http/server/...", args unquoted. A location{}
-# gets a line too; it and all inside it add "\t<location ids from 1, outermost first, /-joined>".
+# `nginx -T` text on stdin -> "<server id>\t<context>\t<name>\t<args>" per directive, includes inlined,
+# server ids from 1 (0 = none), args unquoted. location{} and if{} get a line too, before their body;
+# a location and all inside it add "\t<location ids from 1, outermost first, /-joined>".
 nginx_statements() {
     # -T prints each file once, under "# configuration file <path>:", in the order
     # nginx first read it; relative includes resolve against the main file's dir.
@@ -1766,7 +1772,7 @@ nginx_statements() {
                         if (names[depth] == "location") {
                             lids[depth] = lids[depth] (lids[depth] != "" ? "/" : "") (++nloc)
                             statement(toks, nt, depth - 1)
-                        }
+                        } else if (names[depth] == "if") statement(toks, nt, depth - 1)
                         nt = 0
                         continue
                     }

@@ -15,6 +15,11 @@ setup() {
 
     DISTRO_REBOOT_FLAG="$BATS_TEST_TMPDIR/reboot-required"
     DISTRO_MODULES_DIR="$BATS_TEST_TMPDIR/modules"
+    # The processes and dpkg's file lists the Debian branch reads: none, unless a
+    # test makes some. The real /proc would answer for the test container.
+    DISTRO_PROC="$BATS_TEST_TMPDIR/proc"
+    DISTRO_DPKG_INFO="$BATS_TEST_TMPDIR/dpkg-info"
+    mkdir -p "$DISTRO_PROC" "$DISTRO_DPKG_INFO"
 }
 
 # ---- needrestart's batch output (NEEDRESTART-KSTA) ---------------------
@@ -251,6 +256,110 @@ NEEDRESTART-KSTA: 3'
     _vpssec_stub dpkg-query 1
     run pkg_reboot_required
     [ "$status" -eq 2 ]
+}
+
+# A process whose maps list each path given, as the kernel prints a file that was
+# deleted or replaced while mapped. pid 1 also maps one live file and a memfd.
+_maps_deleted() {
+    local pid="$1"; shift
+    mkdir -p "$DISTRO_PROC/$pid"
+    {
+        printf '55d0c0a00000-55d0c0a28000 r--p 00000000 fe:01 131090                     /usr/lib/systemd/systemd\n'
+        printf '7f3b2a600000-7f3b2a628000 r--p 00000000 00:01 2049                       /memfd:doublemapper (deleted)\n'
+        local f
+        for f; do printf '7f3b2a800000-7f3b2a828000 r--p 00000000 fe:01 262177                     %s (deleted)\n' "$f"; done
+    } > "$DISTRO_PROC/$pid/maps"
+}
+
+# dpkg-query: -W lists kernel image $1; -S owns each path named in the "path=pkg"
+# pairs after it, the way dpkg prints owners, and fails for any other path.
+_dpkg_owns() {
+    local kernel="$1"; shift
+    printf '%s\n' "$@" > "$BATS_TEST_TMPDIR/owners"
+    _vpssec_stub_script dpkg-query <<SH
+if [[ "\$1" == -W ]]; then printf 'install ok installed\tlinux-image-%s\n' "$kernel"; exit 0; fi
+rc=0
+for a in "\${@:2}"; do
+    o=\$(awk -F= -v p="\$a" '\$1 == p {print \$2}' "$BATS_TEST_TMPDIR/owners")
+    if [[ -n "\$o" ]]; then echo "\$o: \$a"; else echo "dpkg-query: no path found matching pattern \$a" >&2; rc=1; fi
+done
+exit \$rc
+SH
+}
+
+@test "debian: a process still running a replaced libc is a reboot, naming the package" {
+    # The lab host after glibc deb13u4: the kernel was current, the audit said
+    # "no reboot required", and sshd, nginx and PID 1 still ran the old libc.
+    _debian_host
+    _maps_deleted 1 /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libaudit.so.1.0.0
+    _maps_deleted 640 /usr/lib/x86_64-linux-gnu/libc.so.6
+    _dpkg_owns 6.1.0-13-amd64 \
+        /usr/lib/x86_64-linux-gnu/libc.so.6=libc6:amd64 \
+        /usr/lib/x86_64-linux-gnu/libaudit.so.1.0.0=libaudit1:amd64
+    run pkg_reboot_required
+    [ "$status" -eq 0 ]
+    [ "$output" = "libc6" ]
+}
+
+@test "debian: a replaced library dpkg knows by its pre-merged-/usr path is found" {
+    # Debian 12 ships libc6 under /lib; the kernel names the file under /usr/lib.
+    _debian_host
+    _maps_deleted 1 /usr/lib/x86_64-linux-gnu/libc.so.6
+    _dpkg_owns 6.1.0-13-amd64 /lib/x86_64-linux-gnu/libc.so.6=libc6:amd64
+    run pkg_reboot_required
+    [ "$status" -eq 0 ]
+    [ "$output" = "libc6" ]
+}
+
+@test "debian: a replaced file of a package outside dnf's reboot list is not a reboot" {
+    _debian_host
+    _maps_deleted 1 /usr/lib/x86_64-linux-gnu/libaudit.so.1.0.0
+    _dpkg_owns 6.1.0-13-amd64 /usr/lib/x86_64-linux-gnu/libaudit.so.1.0.0=libaudit1:amd64
+    run pkg_reboot_required
+    [ "$status" -eq 1 ]
+}
+
+@test "debian: a pending kernel and a replaced daemon are both named, kernel first" {
+    _debian_host
+    _maps_deleted 1 /usr/lib/systemd/libsystemd-shared-257.so
+    _maps_deleted 410 /usr/bin/dbus-daemon
+    _dpkg_owns 6.1.0-15-amd64 \
+        /usr/lib/systemd/libsystemd-shared-257.so=libsystemd-shared:amd64 \
+        /usr/bin/dbus-daemon=dbus-daemon
+    run pkg_reboot_required
+    [ "$status" -eq 0 ]
+    [ "$output" = "kernel: 6.1.0-13-amd64 → 6.1.0-15-amd64
+libsystemd-shared
+dbus-daemon" ]
+}
+
+@test "debian: with no kernel to compare, a replaced libc in use is still a reboot" {
+    _debian_host
+    _maps_deleted 1 /usr/lib/x86_64-linux-gnu/libc.so.6
+    # No kernel image installed, as in a container.
+    _vpssec_stub_script dpkg-query <<SH
+[[ "\$1" == -W ]] && exit 1
+echo "libc6:amd64: \$3"
+SH
+    run pkg_reboot_required
+    [ "$status" -eq 0 ]
+    [ "$output" = "libc6" ]
+}
+
+@test "debian: microcode upgraded since boot is a reboot, upgraded before it is not" {
+    # No process maps microcode: the CPU loads it at boot.
+    _debian_host
+    _kernel_images 6.1.0-13-amd64
+    printf 'cpu  1 2 3\nbtime 1763700000\nprocesses 900\n' > "$DISTRO_PROC/stat"
+    touch -d @1763700100 "$DISTRO_DPKG_INFO/intel-microcode.list"
+    touch -d @1763600000 "$DISTRO_DPKG_INFO/amd64-microcode.list"
+    run pkg_reboot_required
+    [ "$status" -eq 0 ]
+    [ "$output" = "intel-microcode" ]
+
+    touch -d @1763690000 "$DISTRO_DPKG_INFO/intel-microcode.list"
+    run pkg_reboot_required
+    [ "$status" -eq 1 ]
 }
 
 # ---- Arch and the rest ----------------------------------------------------

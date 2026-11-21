@@ -300,21 +300,23 @@ _sysctl_table() {
 # A jail can be up and ban no one: fail2ban still counts the bans. The answers
 # below are fail2ban-client's own output, recorded from 1.0.2 and 1.1.0.
 
-# A running sshd jail; each argument is an action, "name" or "name|attr=value|…".
-# `get sshd action <name> <attr>` answers the value; an attribute the action lacks,
-# and any other jail, exit 255 with the real client's message.
+# A running sshd jail; each argument an action, "name" or "name|option=value|…". `-d`
+# dumps their options as the client does (a Python list per line, as 1.0.2 and 1.1.0
+# print it); `get sshd action` fails as the server does for an option an action lacks.
 _f2b_jail_has() {
-    local spec name pair names=""
+    local spec name pair names="" opts
     local -a pairs
-    : > "$BATS_TEST_TMPDIR/attrs"
+    : > "$BATS_TEST_TMPDIR/dump"
     for spec in "$@"; do
         name="${spec%%|*}"
         names+="${names:+, }$name"
-        [[ "$spec" == *"|"* ]] || continue
-        IFS='|' read -ra pairs <<<"${spec#*|}"
-        for pair in "${pairs[@]}"; do
-            printf '%s\t%s\t%s\n' "$name" "${pair%%=*}" "${pair#*=}" >> "$BATS_TEST_TMPDIR/attrs"
-        done
+        opts="['actname', '$name']"
+        if [[ "$spec" == *"|"* ]]; then
+            IFS='|' read -ra pairs <<<"${spec#*|}"
+            for pair in "${pairs[@]}"; do opts+=", ['${pair%%=*}', '${pair#*=}']"; done
+        fi
+        printf "['set', 'sshd', 'addaction', '%s']\n['multi-set', 'sshd', 'action', '%s', [%s, ['name', 'default']]]\n" \
+            "$name" "$name" "$opts" >> "$BATS_TEST_TMPDIR/dump"
     done
     if [[ -n "$names" ]]; then
         printf 'The jail sshd has the following actions:\n%s\n' "$names"
@@ -323,9 +325,8 @@ _f2b_jail_has() {
     fi > "$BATS_TEST_TMPDIR/actions"
     _vpssec_stub_script fail2ban-client <<SH
 if [[ "\$*" == "get sshd actions" ]]; then cat "$BATS_TEST_TMPDIR/actions"; exit 0; fi
+if [[ "\$*" == "-d" ]]; then cat "$BATS_TEST_TMPDIR/dump"; exit 0; fi
 if [[ "\$1 \$2 \$3" == "get sshd action" ]]; then
-    awk -F'\t' -v a="\$4" -v p="\$5" '\$1 == a && \$2 == p { print \$3; f = 1 } END { exit !f }' \
-        "$BATS_TEST_TMPDIR/attrs" && exit 0
     echo "'CommandAction' object has no attribute '\$5'"
     exit 255
 fi
@@ -420,6 +421,43 @@ SH
     # Rocky 9's fail2ban-firewalld names this banaction_allports, yet it bans by port.
     _f2b_jail_has "firewallcmd-rich-rules|port=ssh"
     _vpssec_refute _f2b_ssh_jail_bans
+}
+
+@test "fail2ban: the options come from the client's dump, never asked of the server" {
+    # fail2ban 1.1.0's nftables action has no type: asking for it left two ERROR
+    # lines in fail2ban.log on every audit.
+    source "$(_vpssec_repo_root)/modules/fail2ban.sh"
+    _vpssec_stub nft 0
+    get_ssh_ports() { echo 35387; }
+    _f2b_jail_has "nftables|port=ssh|protocol=tcp"
+    _vpssec_refute _f2b_ssh_jail_bans
+    _vpssec_stub_called fail2ban-client '-d'
+    _vpssec_refute _vpssec_stub_called fail2ban-client 'get sshd action '
+}
+
+@test "fail2ban: each way of not banning has its status, and names the action" {
+    source "$(_vpssec_repo_root)/modules/fail2ban.sh"
+    get_ssh_ports() { echo 35387; }
+    _f2b_jail_has
+    run _f2b_ssh_jail_bans
+    [ "$status" -eq 1 ]
+
+    _vpssec_absent_command iptables
+    _f2b_jail_has "iptables-multiport|port=ssh"
+    _f2b_ssh_jail_bans || status=$?
+    [ "$status" -eq 2 ]
+    [ "$F2B_GAP" = "iptables-multiport	iptables" ]
+
+    _vpssec_stub nft 0
+    _f2b_jail_has "nftables|port=ssh"
+    status=0
+    _f2b_ssh_jail_bans || status=$?
+    [ "$status" -eq 3 ]
+    [ "$F2B_GAP" = "nftables	nft	ssh" ]
+
+    _f2b_jail_has "nftables|port=35387"
+    _f2b_ssh_jail_bans
+    [ -z "$F2B_GAP" ]
 }
 
 @test "fail2ban.enable_ssh_jail: a loaded jail that bans no one is not enabled" {

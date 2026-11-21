@@ -281,7 +281,9 @@ ss -tln | grep ':2222 '
 - 直接使用 root 登录无法追踪操作者身份
 - 一旦被入侵，攻击者直接获得最高权限
 
-**通过条件**: `sshd -T` 给出的 `PermitRootLogin` 不是 `yes`（`no`、`prohibit-password` 都算通过）
+**通过条件**: `sshd -T` 给出的 `PermitRootLogin` 不是 `yes`（`no`、`prohibit-password` 都算通过）。
+只有 `no` 报「已禁止 root 直接登录」；`prohibit-password`（`sshd -T` 写作 `without-password`）与
+`forced-commands-only` 报「root 只能用密钥登录」，说明里写出 `PermitRootLogin` 的值
 
 **严重性分级**:
 - `PermitRootLogin yes` **且** `PasswordAuthentication yes`：高危
@@ -823,7 +825,9 @@ iptables 都算；只有 fail2ban、Tailscale 自己的链，或者「默认放�
 装 UFW 要是得先卸掉别的包（Debian 的 ufw 与 `iptables-persistent` 冲突，后者连同开机加载已存规则
 的 `netfilter-persistent` 会被一并卸掉），`ufw.install` 什么都不装，只报出会被卸掉的包；所有装包的
 修复都这样，vpssec 从不替你卸软件包。`ufw.enable` 启用之前先给 sshd 监听的**每一个**端口各加一条放行规则，再给你当前的来源 IP 加一条
-救援规则，列出将要生效的规则，等你手打 `yes` 才启用。UFW 已启用、但有 SSH 端口没被放行时
+救援规则，列出将要生效的规则，再列出在公网地址上监听、却没有规则放行的服务（启用后外面就连不上；
+DHCP 客户端与 docker-proxy 不算，前者 UFW 自带放行，后者的流量不经 UFW 的入站链），等你手打 `yes`
+才启用。这些服务 vpssec 不替你放行：要继续对外服务的，先自己加规则再回答。UFW 已启用、但有 SSH 端口没被放行时
 （`ufw.no_ssh_rule`），`ufw.allow_ssh`（安全）只补缺的那几个端口
 
 **修复方法**（Debian / Ubuntu）:
@@ -864,7 +868,8 @@ SSH 改过端口时先 `firewall-cmd --permanent --add-port=<端口>/tcp && fire
 **为什么重要**: 默认拒绝策略只允许明确放行的流量通过
 
 **自动修复**: `ufw.set_default_deny`（高风险）。切换前先给每个 sshd 端口加放行规则；
-没有显式放行的在跑服务会被切断
+没有显式放行的在跑服务会被切断，所以确认前同 `ufw.enable` 一样列出在公网监听、却没有规则放行的服务，
+等你手打 `yes` 才切换
 
 **修复方法**:
 ```bash

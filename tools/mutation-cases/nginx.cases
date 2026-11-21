@@ -223,3 +223,8 @@ run_case "cert/operator-name" 1 \
 run_case "unreadable/audit-complete" 1 \
     '        _module_record_failure nginx query' \
     '        :'
+
+# Nothing served on 443, and the finding still said 80 and 443 both lacked one.
+run_case "audit/80-only-said-both" 1 \
+    "            [[ \"\$coverage\" == 80\\ * ]] && desc_key='nginx.no_catchall_80_desc'" \
+    '            :'

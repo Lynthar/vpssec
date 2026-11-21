@@ -81,3 +81,51 @@ _emitted() {
     _logging_audit_auditd
     [ "$(_emitted id)" = logging.auditd_inactive ]
 }
+
+# auditd running, its rules.d holding $1, and auditctl -l answering $2 (exit 1 when empty).
+_auditd_running_with() {
+    _vpssec_stub auditd
+    _vpssec_stub systemctl 0
+    mkdir -p "$AUDIT_RULES_D"
+    printf '%b' "$1" > "$AUDIT_RULES_D/audit.rules"
+    if [[ -n "$2" ]]; then _vpssec_stub auditctl 0 "$2"; else _vpssec_stub auditctl 1; fi
+    _cmdline 'quiet'
+}
+
+@test "auditd: the distro's own audit.rules, control lines only, is no rules" {
+    # Debian and RHEL ship it with the auditd package: -D, -b, -f and the like.
+    _auditd_running_with '## First rule - delete all\n-D\n-b 8192\n-f 1\n--backlog_wait_time 60000\n' 'No rules'
+    _logging_audit_auditd
+    [ "$(_emitted id)" = logging.auditd_no_rules ]
+    [ "$(_emitted fix_id)" = logging.setup_audit_rules ]
+
+    # The same files with an auditctl that cannot answer: they alone say none.
+    state_init
+    _auditd_running_with '-D\n-b 8192\n-f 1\n' ''
+    _logging_audit_auditd
+    [ "$(_emitted id)" = logging.auditd_no_rules ]
+}
+
+@test "auditd: a watch or a syscall rule in rules.d, loaded, is rules" {
+    _auditd_running_with '-D\n-w /etc/passwd -p wa -k identity\n' '-w /etc/passwd -p wa -k identity'
+    _logging_audit_auditd
+    [ "$(_emitted id)" = logging.auditd_configured ]
+
+    state_init
+    _auditd_running_with '-a always,exit -F arch=b64 -S execve -k exec\n' '-a always,exit -F arch=b64 -S execve -F key=exec'
+    _logging_audit_auditd
+    [ "$(_emitted id)" = logging.auditd_configured ]
+}
+
+@test "auditd: while it runs, an empty kernel set is no rules whatever the files say" {
+    # rules.d kept a rule after a rollback deleted vpssec's file and a reboot.
+    _auditd_running_with '-w /srv -p wa -k srv\n' 'No rules'
+    _logging_audit_auditd
+    [ "$(_emitted id)" = logging.auditd_no_rules ]
+}
+
+@test "auditd: an auditctl that cannot answer leaves the files to decide" {
+    _auditd_running_with '-w /srv -p wa -k srv\n' ''
+    _logging_audit_auditd
+    [ "$(_emitted id)" = logging.auditd_configured ]
+}

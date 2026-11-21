@@ -251,6 +251,7 @@ declare -gA FIX_SELF_CONFIRMED=(
     ["ssh.disable_password_auth"]="true"        # confirm_critical after SSH-key precondition (modules/ssh.sh)
     ["ssh.disable_root_login"]="true"           # confirm_critical after admin-user precondition (modules/ssh.sh)
     ["ufw.enable"]="true"                        # confirm_critical after showing current rules (modules/ufw.sh)
+    ["ufw.set_default_deny"]="true"              # confirm_critical after naming what deny-all cuts off (modules/ufw.sh)
     ["docker.enable_no_new_privileges"]="true"  # confirm_critical after its preconditions, before daemon.json is written (modules/docker.sh)
 )
 
@@ -439,6 +440,7 @@ declare -gA CHECK_SCORE_CATEGORY=(
     ["update.unattended_disabled"]="recommended"
     ["update.unattended_not_installed"]="recommended"
     ["update.unattended_state_unknown"]="info" # not measured: no score either way
+    ["update.unattended_origins_uncovered"]="info" # a gap in coverage beside the pass, not a second verdict
 
     # === Docker Module - conditional (only if Docker installed) ===
     ["docker.not_installed"]="info"
@@ -722,6 +724,7 @@ declare -gA CHECK_SCORE_CATEGORY=(
     ["webapp.nginx_security_headers_ok"]="conditional"
     ["webapp.nginx_security_headers_not_checked"]="info"   # not measured: no score either way
     ["webapp.php2shell"]="info"   # a lead, not a verdict: distributions backport under the old number
+    ["webapp.nginx2root"]="info"  # likewise
     ["webapp.nginx_hsts_missing"]="conditional"
     ["webapp.nginx_hsts_weak"]="conditional"
     ["webapp.nginx_directory_listing"]="conditional"

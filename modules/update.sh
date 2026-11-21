@@ -218,6 +218,7 @@ _update_audit_unattended() {
     if [[ "$status" == "ok" ]]; then
         check_emit "update.unattended_enabled" low passed
         print_ok "$(i18n 'update.unattended_enabled')"
+        _update_audit_origin_gaps
     else
         local reason_desc
         case "$status" in
@@ -239,6 +240,186 @@ _update_audit_unattended() {
             fix="update.enable_unattended"
         print_severity "low" "$(i18n 'update.unattended_disabled')"
     fi
+}
+
+# --- What unattended-upgrade leaves out (apt) ---
+
+# unattended-upgrade's Origins-Pattern strings from an `apt-config dump` ($1), one per
+# line, built as it builds them: Allowed-Origins "<id>:<suite>" is "o=<id>,a=<suite>",
+# and $distro_id / $distro_codename / $distro_release take its os-release values.
+_update_uu_patterns() {
+    local id name line k v
+    local -A val=()
+    id=$(_distro_osrelease_field ID)
+    name=$(_distro_osrelease_field NAME)
+    id="${id^}"
+    [[ -n "$name" && "${id,,}" == "${name,,}" ]] && id="$name"
+    val[distro_id]="${id:-n/a}"
+    val[distro_codename]=$(_distro_osrelease_field VERSION_CODENAME)
+    val[distro_release]=$(_distro_osrelease_field VERSION_ID)
+    while IFS= read -r line; do
+        for k in distro_id distro_codename distro_release; do
+            v="${val[$k]:-n/a}"
+            # Quoted: bash 5.2+ otherwise expands & in $v to the matched text.
+            line="${line//"\${$k}"/"$v"}"
+            line="${line//"\$$k"/"$v"}"
+        done
+        printf '%s\n' "$line"
+    done < <(awk -F'"' '
+        /^Unattended-Upgrade::Origins-Pattern:: "/ { print $2 }
+        /^Unattended-Upgrade::Allowed-Origins:: "/ {
+            s = $2; i = 0
+            for (j = 1; j <= length(s); j++)
+                if (substr(s, j, 1) == ":" && substr(s, j - 1, 1) != "\\") { i = j; break }
+            if (i) { id = substr(s, 1, i - 1); suite = substr(s, i + 1) }
+            else { split(s, w, " "); id = w[1]; suite = w[2] }
+            gsub(/\\:/, ":", id)
+            print "o=" id ",a=" suite
+        }' <<< "$1")
+}
+
+# Does Origins-Pattern string $1 match a package file whose o, a, n, l, c and site
+# are $2..$7? Every key=value must glob-match, as in unattended-upgrade, where
+# "\," is a literal comma. An empty pattern or an unknown key matches nothing.
+_update_uu_pattern_matches() {
+    local pattern="${1//\\,/$'\x01'}" tok key val field
+    local -a toks=()
+    [[ -n "${pattern//[[:space:]]/}" ]] || return 1
+    IFS=, read -ra toks <<< "$pattern"
+    for tok in "${toks[@]}"; do
+        [[ "$tok" == *=* ]] || return 1
+        key="${tok%%=*}"
+        key="${key//[[:space:]]/}"
+        val="${tok#*=}"
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        val="${val//$'\x01'/,}"
+        case "$key" in
+            o|origin) field="$2" ;;
+            a|suite|archive) field="$3" ;;
+            n|codename) field="$4" ;;
+            l|label) field="$5" ;;
+            c|component) field="$6" ;;
+            site) field="$7" ;;
+            *) return 1 ;;
+        esac
+        # shellcheck disable=SC2053  # the value is a glob, as fnmatch reads it
+        [[ "$field" == $val ]] || return 1
+    done
+}
+
+# The package files in a global `apt-cache policy` ($1), one per line: the path
+# that names it in a version table, then its o, a, n, l, c and site, all
+# separated by \x1f, which unlike a tab keeps an empty field in its place.
+_update_apt_package_files() {
+    awk -v S=$'\x1f' '
+        function flush() {
+            if (key != "") print key S f["o"] S f["a"] S f["n"] S f["l"] S f["c"] S site
+            key = ""
+        }
+        /^Package files:/ { on = 1; next }
+        /^[^ ]/ { flush(); on = 0; next }
+        !on { next }
+        /^ -?[0-9]+ / { flush(); key = $0; sub(/^ -?[0-9]+ /, "", key); split("", f); site = ""; next }
+        /^     release / {
+            m = split(substr($0, 14), kv, ",")
+            for (i = 1; i <= m; i++) if (e = index(kv[i], "=")) f[substr(kv[i], 1, e - 1)] = substr(kv[i], e + 1)
+            next
+        }
+        /^     origin / { site = substr($0, 13); next }
+        END { flush() }
+    ' <<< "$1"
+}
+
+# The repository files of each package's versions, one "<package>\x1f<1 if the
+# version is the candidate, else 0>\x1f<path>" line each, from `apt-cache policy
+# <packages>` ($1). The dpkg status file records what is installed, no repository.
+_update_apt_version_files() {
+    awk -v S=$'\x1f' '
+        /^[^ ]/ { pkg = $0; sub(/:$/, "", pkg); cand = ""; iscand = 0; next }
+        /^  Candidate: / { cand = $2; next }
+        substr($0, 1, 5) == " *** " || (substr($0, 1, 5) == "     " && substr($0, 6, 1) != " ") {
+            v = substr($0, 6); sub(/ -?[0-9]+$/, "", v); iscand = (v == cand); next
+        }
+        substr($0, 1, 8) == "        " {
+            f = substr($0, 9); sub(/^-?[0-9]+ /, "", f)
+            if (f != "/var/lib/dpkg/status") print pkg S iscand S f
+        }
+    ' <<< "$1"
+}
+
+# Packages behind public listeners unattended-upgrade never updates, "<package> (<site>)"
+# per line ($1: an `apt-config dump`): no version from their candidate's origin (o=), the
+# stream updates arrive by, is in an allowed origin. Fails when sockets or apt cannot be read.
+_update_uu_uncovered_services() {
+    if [[ "${VPSSEC_MODULE_LOADED[networking]:-0}" != 1 ]]; then
+        module_load networking || return 1
+    fi
+    local listeners
+    listeners=$(_net_list_listeners) || return 1
+    local -a exes=() pkgs=() patterns=()
+    local proto port addr proc pid exe
+    while IFS=$'\t' read -r proto port addr proc pid; do
+        [[ -n "$pid" ]] || continue
+        exe=$(readlink "$DISTRO_PROC/$pid/exe" 2>/dev/null) || continue
+        exes+=("${exe% (deleted)}")
+    done < <(_net_public_listeners <<< "$listeners")
+    mapfile -t pkgs < <(pkg_file_owners "${exes[@]}")
+    (( ${#pkgs[@]} )) || return 0
+
+    local policy versions
+    policy=$(LC_ALL=C apt-cache policy 2>/dev/null) || return 1
+    versions=$(LC_ALL=C apt-cache policy "${pkgs[@]}" 2>/dev/null) || return 1
+    versions=$(_update_apt_version_files "$versions")
+    mapfile -t patterns < <(_update_uu_patterns "$1")
+
+    local -A files=() stream=() site_of=() covered=()
+    local key rest p iscand f pat o a n l c site
+    while IFS=$'\x1f' read -r key rest; do
+        files["$key"]="$rest"
+    done < <(_update_apt_package_files "$policy")
+    # The candidate's origins first: they decide which versions count.
+    while IFS=$'\x1f' read -r p iscand f; do
+        [[ -n "$p" && "$iscand" == 1 ]] || continue
+        IFS=$'\x1f' read -r o a n l c site <<< "${files[$f]-}"
+        stream["$p"]+=" $o "
+        [[ -n "${site_of[$p]:-}" ]] || site_of["$p"]="$site"
+    done <<< "$versions"
+    while IFS=$'\x1f' read -r p iscand f; do
+        [[ -n "$p" && -z "${covered[$p]:-}" ]] || continue
+        IFS=$'\x1f' read -r o a n l c site <<< "${files[$f]-}"
+        [[ "${stream[$p]:-}" == *" $o "* ]] || continue
+        for pat in ${patterns[@]+"${patterns[@]}"}; do
+            if _update_uu_pattern_matches "$pat" "$o" "$a" "$n" "$l" "$c" "$site"; then
+                covered["$p"]=1
+                break
+            fi
+        done
+    done <<< "$versions"
+    for p in "${pkgs[@]}"; do
+        [[ -n "${covered[$p]:-}" ]] || echo "$p${site_of[$p]:+ (${site_of[$p]})}"
+    done
+}
+
+# unattended-upgrade is on, but not every public service's updates are in what it
+# installs: an unscored note naming them. Not judged when apt cannot be read.
+_update_audit_origin_gaps() {
+    [[ "$VPSSEC_PKG_MGR" == apt ]] || return 0
+    local dump gaps
+    if ! dump=$(apt-config dump 2>/dev/null) || ! gaps=$(_update_uu_uncovered_services "$dump"); then
+        log_warn "update: could not tell which public services unattended-upgrade leaves out"
+        return 0
+    fi
+    [[ -n "$gaps" ]] || return 0
+    local list
+    local -a items=()
+    mapfile -t items <<< "$gaps"
+    printf -v list '%s, ' "${items[@]}"
+    check_emit "update.unattended_origins_uncovered" info failed \
+        title="$(i18n 'update.unattended_origins_uncovered' "count=$(count_lines "$gaps")")" \
+        desc="$(i18n 'update.unattended_origins_uncovered_desc' "list=${list%, }")" \
+        suggestion="$(i18n 'update.unattended_origins_uncovered_suggestion')"
+    print_warn "$(i18n 'update.unattended_origins_uncovered' "count=$(count_lines "$gaps")")"
 }
 
 _update_audit_reboot() {

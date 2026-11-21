@@ -1,0 +1,89 @@
+# Mutation cases: tests/test_update_origin_gaps.bats against modules/update.sh.
+# mutate-suite: modules/update.sh tests/test_update_origin_gaps.bats
+#
+# The public services unattended-upgrade never updates: its allowed origins rebuilt
+# and matched as it does, and a package judged by the stream its candidate is on.
+
+run_case "audit/note-not-asked" 1 \
+    '        _update_audit_origin_gaps' \
+    '        :'
+
+run_case "audit/asked-off-apt" 1 \
+    '    [[ "$VPSSEC_PKG_MGR" == apt ]] || return 0' \
+    '    :'
+
+run_case "patterns/allowed-origins-dropped" 1 \
+    '        /^Unattended-Upgrade::Allowed-Origins:: "/ {' \
+    '        /^Unattended-Upgrade::Allowed-Origins-Never:: "/ {'
+
+run_case "patterns/braced-not-substituted" 1 \
+    '            line="${line//"\${$k}"/"$v"}"' \
+    '            :'
+
+run_case "patterns/bare-not-substituted" 1 \
+    '            line="${line//"\$$k"/"$v"}"' \
+    '            :'
+
+run_case "patterns/id-not-capitalised" 1 \
+    '    id="${id^}"' \
+    '    :'
+
+run_case "patterns/name-not-used" 1 \
+    '    [[ -n "$name" && "${id,,}" == "${name,,}" ]] && id="$name"' \
+    '    :'
+
+run_case "patterns/escaped-colon-splits" 1 \
+    '                if (substr(s, j, 1) == ":" && substr(s, j - 1, 1) != "\\") { i = j; break }' \
+    '                if (substr(s, j, 1) == ":") { i = j; break }'
+
+run_case "match/one-token-enough" 1 \
+    '        [[ "$field" == $val ]] || return 1' \
+    '        [[ "$field" == $val ]] && return 0'
+
+run_case "match/literal-not-glob" 1 \
+    '        [[ "$field" == $val ]] || return 1' \
+    '        [[ "$field" == "$val" ]] || return 1'
+
+run_case "match/unknown-key-matches" 1 \
+    '            *) return 1 ;;' \
+    '            *) field="$val" ;;'
+
+run_case "match/empty-matches-all" 1 \
+    '    [[ -n "${pattern//[[:space:]]/}" ]] || return 1' \
+    '    :'
+
+run_case "match/escaped-comma-splits" 1 \
+    "    local pattern=\"\${1//\\\\,/\$'\\x01'}\" tok key val field" \
+    '    local pattern="$1" tok key val field'
+
+# The candidate's file alone: Debian's sshd, its candidate from a point release,
+# read as never updated on security-only patterns, which vpssec's own fix writes.
+run_case "stream/candidate-only" 1 \
+    '        [[ "${stream[$p]:-}" == *" $o "* ]] || continue' \
+    '        [[ "$iscand" == 1 ]] || continue'
+
+# Any version anywhere: Debian's own nginx in trixie-security covers the pinned
+# nginx.org one, which unattended-upgrade never replaces.
+run_case "stream/any-origin" 1 \
+    '        [[ "${stream[$p]:-}" == *" $o "* ]] || continue' \
+    '        :'
+
+run_case "services/site-unnamed" 1 \
+    '        [[ -n "${site_of[$p]:-}" ]] || site_of["$p"]="$site"' \
+    '        :'
+
+run_case "services/deleted-binary-lost" 1 \
+    '        exes+=("${exe% (deleted)}")' \
+    '        exes+=("$exe")'
+
+run_case "services/listener-failure-reads-none" 1 \
+    '    listeners=$(_net_list_listeners) || return 1' \
+    '    listeners=$(_net_list_listeners) || return 0'
+
+run_case "services/files-failure-reads-none" 1 \
+    '    policy=$(LC_ALL=C apt-cache policy 2>/dev/null) || return 1' \
+    '    policy=$(LC_ALL=C apt-cache policy 2>/dev/null) || true'
+
+run_case "services/versions-failure-reads-none" 1 \
+    '    versions=$(LC_ALL=C apt-cache policy "${pkgs[@]}" 2>/dev/null) || return 1' \
+    '    versions=$(LC_ALL=C apt-cache policy "${pkgs[@]}" 2>/dev/null) || true'

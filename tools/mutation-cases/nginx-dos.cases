@@ -1,0 +1,38 @@
+# Mutation cases: tests/test_nginx_dos.bats against modules/nginx.sh.
+# mutate-suite: modules/nginx.sh tests/test_nginx_dos.bats
+#
+# The DoS timeouts: the largest value anywhere, named by where it is set, with
+# nginx's default counted only where nothing above it sets one.
+
+# The value read last wins again: a server's 120s hidden behind http{}'s later 10s.
+run_case "max/last-value-wins" 1 \
+    '        if (( secs > best )); then' \
+    '        if true; then'
+
+run_case "max/first-value-wins" 1 \
+    '        if (( secs > best )); then' \
+    '        if (( best < 0 )); then'
+
+run_case "where/location-unnamed" 1 \
+    '            n++; val[n] = $4; sid[n] = $1; lid[n] = (c ~ /location/) ? $5 : ""' \
+    '            n++; val[n] = $4; sid[n] = $1; lid[n] = ""'
+
+run_case "where/underscore-name-kept" 1 \
+    '            if (x == "" || x == "_") { x = ls[s]; sub(/ .*/, "", x) }' \
+    '            x = x'
+
+run_case "default/never-counted" 1 \
+    '            for (s = 1; s <= last; s++) if (!(s in own)) { print ENVIRON["D"] "\t" label(s, "") " " ENVIRON["DFLT"]; exit }' \
+    '            nothing = 0'
+
+run_case "default/counted-under-http-value" 1 \
+    '            if (top) exit' \
+    '            nothing = 0'
+
+run_case "default/counted-where-servers-set-it" 1 \
+    '            if (c == "server") own[$1] = 1' \
+    '            nothing = 0'
+
+run_case "default/unset-config-passes" 1 \
+    '            if (!n) print ENVIRON["D"] "\thttp{} " ENVIRON["DFLT"]' \
+    '            nothing = 0'

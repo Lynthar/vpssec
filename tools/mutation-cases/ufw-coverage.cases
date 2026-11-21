@@ -17,7 +17,7 @@ run_case "admits/limit-dropped" 1 \
     '            if ($4 != "allow") next'
 
 run_case "admits/udp-counted" 1 \
-    '            if ($5 != "tcp" && $5 != "any") next' \
+    '            if ($5 != proto && $5 != "any") next' \
     '            if (0) next'
 
 run_case "admits/open-ignores-limits" 1 \

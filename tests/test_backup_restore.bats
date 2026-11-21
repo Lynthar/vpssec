@@ -418,12 +418,12 @@ SH
     _rollback_of 'restore /etc/ssh/sshd_config' 0
     mkdir -p "$VPSSEC_BACKUPS/20260501_120000"
     run _rollback_session_label 20260501_120000
-    [ "$output" = "20260501_120000 (1 changes)" ]
+    [ "$output" = "20260501_120000 (changes: 1)" ]
 
     run _rollback_session 20260501_120000
     [ "$status" -eq 0 ]
     run _rollback_session_label 20260501_120000
-    [[ "$output" =~ ^"20260501_120000 (1 changes, rolled back "[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]
+    [[ "$output" =~ ^"20260501_120000 (changes: 1, rolled back "[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]
     [ -z "$(ls -A "$VPSSEC_BACKUPS/20260501_120000")" ]
 }
 

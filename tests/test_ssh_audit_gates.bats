@@ -109,3 +109,27 @@ _audit() { if ssh_audit; then :; fi; }
     [ "$status" -eq 1 ]
     _vpssec_refute _ssh_algorithms_ok
 }
+
+_root_login_pass() {
+    jq -r '.[] | select(.id == "ssh.root_login_disabled") | "\(.title)|\(.desc)"' "$VPSSEC_STATE/checks.json"
+}
+
+@test "root login: sshd's default lets root in by key, and the pass says so" {
+    # sshd -T prints the default, prohibit-password, under its old name.
+    _vpssec_stub_sshd_merging
+    printf 'PasswordAuthentication no\n' > "$SSH_DROPIN_DIR/50-cloud.conf"
+    _ssh_audit_root_login
+    [ "$(_root_login_pass)" = "Root can log in with a key only|PermitRootLogin=without-password" ]
+}
+
+@test "root login: forced-commands-only is key-only too; only no is disabled" {
+    _vpssec_stub_sshd_merging
+    printf 'PermitRootLogin forced-commands-only\n' > "$SSH_DROPIN_DIR/50-cloud.conf"
+    _ssh_audit_root_login
+    [ "$(_root_login_pass)" = "Root can log in with a key only|PermitRootLogin=forced-commands-only" ]
+
+    state_init
+    printf 'PermitRootLogin no\n' > "$SSH_DROPIN_DIR/50-cloud.conf"
+    _ssh_audit_root_login
+    [ "$(_root_login_pass)" = "Root login is disabled|PermitRootLogin=no" ]
+}

@@ -153,24 +153,38 @@ _f2b_port_list_covers() {
     done < <(get_ssh_ports)
 }
 
-# A ban by jail $1's action $2 blocks every port sshd listens on. ufw bans the
-# source on all ports (an application= narrowing that is the operator's choice);
-# an action without a port attribute is not one vpssec can judge.
+# Option $3 of jail $1's action $2 in $4, fail2ban's own reading of its config
+# (`fail2ban-client -d`, parsed by the client: asking the server for an option an
+# action lacks logs an ERROR there on every audit). Fails when it has none.
+_f2b_action_option() {
+    J="$1" A="$2" K="$3" awk -v q="'" '
+        index($0, "[" q "multi-set" q ", " q ENVIRON["J"] q ", " q "action" q ", " q ENVIRON["A"] q ", [") == 1 {
+            k = "[" q ENVIRON["K"] q ", " q
+            if (i = index($0, k)) { v = substr($0, i + length(k)); sub(q "\\].*", "", v); print v; found = 1 }
+            exit
+        }
+        END { exit !found }' <<<"$4"
+}
+
+# A ban by jail $1's action $2 blocks every port sshd listens on; $3 is the config
+# dump. ufw bans the source on all ports (an application= narrowing that is the
+# operator's choice); an action without a port option is not one vpssec can judge.
 _f2b_action_covers_ssh() {
     local ports
     [[ "$2" == ufw* || "$2" == *allports* ]] && return 0
-    ports=$(fail2ban-client get "$1" action "$2" port 2>/dev/null) || return 0
+    ports=$(_f2b_action_option "$1" "$2" port "$3") || return 0
     _f2b_port_list_covers "$ports" && return 0
     # nftables[type=allports] and firewallcmd-*[actiontype=<allports>] keep the plain name.
-    [[ "$(fail2ban-client get "$1" action "$2" type 2>/dev/null)" == allports ]] ||
-        [[ "$(fail2ban-client get "$1" action "$2" actiontype 2>/dev/null)" == "<allports>" ]]
+    [[ "$(_f2b_action_option "$1" "$2" type "$3")" == allports ]] ||
+        [[ "$(_f2b_action_option "$1" "$2" actiontype "$3")" == "<allports>" ]]
 }
 
-# The SSH jail can ban: it has an action, and each firewall action finds its tool
-# and covers every sshd port. All three failures are silent in fail2ban: no action
-# after a banaction rename, iptables on an nft-only host, port = ssh on a moved sshd.
+# The SSH jail can ban: it has an action, and each firewall action finds its tool and
+# covers every sshd port. Else 1 no action, 2 a tool missing, 3 a port not covered, all
+# silent in fail2ban; F2B_GAP then holds that action, its tool and port, tab-separated.
+F2B_GAP=""
 _f2b_ssh_jail_bans() {
-    local out="" jail a tool
+    local out="" jail a tool dump=""
     for jail in sshd ssh; do
         out=$(fail2ban-client get "$jail" actions 2>/dev/null) && break
     done
@@ -186,9 +200,15 @@ _f2b_ssh_jail_bans() {
             firewallcmd*)         tool=firewall-cmd ;;
             *)                    continue ;;
         esac
-        check_command "$tool" || return 1
-        _f2b_action_covers_ssh "$jail" "$a" || return 1
+        F2B_GAP="$a"$'\t'"$tool"
+        check_command "$tool" || return 2
+        [[ -n "$dump" ]] || dump=$(fail2ban-client -d 2>/dev/null) || dump=""
+        if ! _f2b_action_covers_ssh "$jail" "$a" "$dump"; then
+            F2B_GAP+=$'\t'"$(_f2b_action_option "$jail" "$a" port "$dump")"
+            return 3
+        fi
     done <<<"$actions"
+    F2B_GAP=""
 }
 
 # The SSH jail is loaded and bans: what enable_ssh_jail must leave behind.
@@ -417,13 +437,22 @@ _f2b_audit_ssh_jail() {
 
         # Loaded is not protecting: a jail that cannot ban still counts its
         # "Currently banned", with no firewall rule behind any of them.
-        if _f2b_ssh_jail_bans; then
+        local bans_rc=0 gap_action gap_tool gap_ports why
+        _f2b_ssh_jail_bans || bans_rc=$?
+        if (( bans_rc == 0 )); then
             check_emit "fail2ban.ssh_jail_enabled" low passed \
                 desc="$(i18n 'fail2ban.ssh_jail_enabled_desc' "current=$current_banned" "total=$total_banned" "maxretry=$maxretry" "bantime=$bantime")"
             print_ok "$(i18n 'fail2ban.ssh_jail_enabled') (banned: $current_banned, total: $total_banned)"
         else
+            IFS=$'\t' read -r gap_action gap_tool gap_ports <<<"$F2B_GAP"
+            case "$bans_rc" in
+                2) why=$(i18n 'fail2ban.ssh_jail_not_banning_tool' "action=$gap_action" "tool=$gap_tool") ;;
+                3) why=$(i18n 'fail2ban.ssh_jail_not_banning_port' "action=$gap_action" \
+                       "ports=$gap_ports" "ssh_ports=$(get_ssh_ports | paste -sd, -)") ;;
+                *) why=$(i18n 'fail2ban.ssh_jail_not_banning_no_action') ;;
+            esac
             check_emit "fail2ban.ssh_jail_not_banning" low failed \
-                desc="$(i18n 'fail2ban.ssh_jail_not_banning_desc')" \
+                desc="$why $(i18n 'fail2ban.ssh_jail_not_banning_desc')" \
                 suggestion="$(i18n 'fail2ban.ssh_jail_not_banning_suggestion')" \
                 fix="fail2ban.configure_ssh_jail"
             print_severity "low" "$(i18n 'fail2ban.ssh_jail_not_banning')"

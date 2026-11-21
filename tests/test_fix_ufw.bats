@@ -6,7 +6,7 @@
 load helpers.bash
 
 setup() {
-    _vpssec_load
+    _vpssec_load core/distro.sh
     # shellcheck source=/dev/null
     source "$(_vpssec_repo_root)/modules/ufw.sh"
 
@@ -36,8 +36,15 @@ setup() {
 
     # ufw.enable holds harden_network's keys in ufw's sysctl file through
     # kernel.sh, which the engine loads; test_fix_kernel.bats covers that helper.
-    declare -gA VPSSEC_MODULE_LOADED=([kernel]=1)
+    declare -gA VPSSEC_MODULE_LOADED=([kernel]=1 [networking]=1)
     _kernel_ufw_align_persisted() { echo "ufw-sysctl-align" >> "$VPSSEC_STUB_LOG"; }
+
+    # ufw.enable names the public listeners it will cut off, through networking.sh.
+    # No listener and no defaults file unless a test sets them: the CI runner has both.
+    # shellcheck source=/dev/null
+    source "$(_vpssec_repo_root)/modules/networking.sh"
+    _vpssec_stub ss
+    DISTRO_UFW_DEFAULTS="$BATS_TEST_TMPDIR/default-ufw"
 }
 
 # ---- stubs ----------------------------------------------------------
@@ -139,6 +146,14 @@ _ufw_refuses() {
     _ufw_working "" "$1"
 }
 
+# `ss -tulnpH` lines, as ss prints them, one argument each.
+_ss_says() {
+    printf '%s\n' "$@" > "$BATS_TEST_TMPDIR/ss.out"
+    _vpssec_stub_script ss <<SH
+cat "$BATS_TEST_TMPDIR/ss.out"
+SH
+}
+
 # Pretend the operator is connected from this address.
 _operator_at() { export SSH_CONNECTION="$1 54321 10.0.0.1 22"; }
 
@@ -219,6 +234,97 @@ _call_at() {
     run _ufw_fix_enable
     [[ "$output" == *"ufw deny 3306/tcp"*"CONFIRM-PROMPT"* ]]
     [[ "$output" == *"ufw allow 'Nginx Full' comment 'web'"*"CONFIRM-PROMPT"* ]]
+}
+
+@test "enable: public listeners no rule lets in are named before the confirmation" {
+    # The second proxy host: xray and nginx on 0.0.0.0, a rule for neither. Saying
+    # yes to the rule list alone took every proxy port down.
+    i18n_load en_US
+    _ss_says \
+        'tcp   LISTEN 0      4096         0.0.0.0:443        0.0.0.0:*    users:(("xray",pid=812,fd=7))' \
+        'tcp   LISTEN 0      511          0.0.0.0:80         0.0.0.0:*    users:(("nginx",pid=640,fd=6))' \
+        'tcp   LISTEN 0      511             [::]:80            [::]:*    users:(("nginx",pid=640,fd=7))' \
+        'tcp   LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=500,fd=3))' \
+        'tcp   LISTEN 0      511        127.0.0.1:31300      0.0.0.0:*    users:(("nginx",pid=640,fd=8))'
+    confirm_critical() { echo "CONFIRM-PROMPT" >&2; return 1; }
+
+    run _ufw_fix_enable
+    [[ "$output" == *"unreachable from outside"*"tcp/443 (xray)"*"CONFIRM-PROMPT"* ]]
+    [[ "$output" == *"tcp/80 (nginx)"*"CONFIRM-PROMPT"* ]]
+    [ "$(grep -c 'tcp/80 (nginx)' <<< "$output")" -eq 1 ]
+    [[ "$output" != *"tcp/22 "* && "$output" != *31300* ]]
+}
+
+@test "enable: the listeners it names are not opened for the operator" {
+    _ss_says 'tcp   LISTEN 0      4096         0.0.0.0:443        0.0.0.0:*    users:(("xray",pid=812,fd=7))'
+    confirm_critical() { return 0; }
+
+    run _ufw_fix_enable
+    [ "$status" -eq 0 ]
+    [ "$(awk '{print $6}' "$UFW_USER_RULES")" = "22" ]
+}
+
+@test "enable: the session rescue rule does not hide what will be cut off" {
+    # It admits every port from the operator's address, the rest of the world none.
+    i18n_load en_US
+    _operator_at 203.0.113.9
+    _ss_says 'tcp   LISTEN 0      4096         0.0.0.0:443        0.0.0.0:*    users:(("xray",pid=812,fd=7))'
+    confirm_critical() { echo "CONFIRM-PROMPT" >&2; return 1; }
+
+    run _ufw_fix_enable
+    [[ "$output" == *"tcp/443 (xray)"*"CONFIRM-PROMPT"* ]]
+}
+
+@test "enable: a rule lets a listener in on its own protocol only" {
+    i18n_load en_US
+    _tuple allow tcp 443 0.0.0.0/0 any 0.0.0.0/0 in
+    _tuple allow any 8443 0.0.0.0/0 any 0.0.0.0/0 in
+    _ss_says \
+        'tcp   LISTEN 0      4096         0.0.0.0:443        0.0.0.0:*    users:(("xray",pid=812,fd=7))' \
+        'udp   UNCONN 0      0            0.0.0.0:443        0.0.0.0:*    users:(("hysteria",pid=813,fd=7))' \
+        'udp   UNCONN 0      0       203.0.113.10:8443       0.0.0.0:*    users:(("tuic",pid=814,fd=7))'
+    confirm_critical() { echo "CONFIRM-PROMPT" >&2; return 1; }
+
+    run _ufw_fix_enable
+    [[ "$output" == *"udp/443 (hysteria)"*"CONFIRM-PROMPT"* ]]
+    [[ "$output" != *"tcp/443"* && "$output" != *8443* ]]
+}
+
+@test "enable: what ufw lets in anyway is not named: the DHCP client, docker-proxy" {
+    # before.rules admits DHCP replies; published ports are DNAT-forwarded past INPUT.
+    i18n_load en_US
+    _ss_says \
+        'udp   UNCONN 0      0            0.0.0.0:68         0.0.0.0:*    users:(("dhclient",pid=400,fd=7))' \
+        'tcp   LISTEN 0      4096         0.0.0.0:8080       0.0.0.0:*    users:(("docker-proxy",pid=900,fd=4))'
+    confirm_critical() { echo "CONFIRM-PROMPT" >&2; return 1; }
+
+    run _ufw_fix_enable
+    [[ "$output" == *"CONFIRM-PROMPT"* ]]
+    [[ "$output" != *"unreachable"* ]]
+}
+
+@test "enable: an ACCEPT input policy cuts nothing off, so nothing is named" {
+    i18n_load en_US
+    printf 'DEFAULT_INPUT_POLICY="DROP"\nDEFAULT_INPUT_POLICY="ACCEPT"\n#DEFAULT_INPUT_POLICY="DROP"\n' \
+        > "$DISTRO_UFW_DEFAULTS"
+    _ss_says 'tcp   LISTEN 0      4096         0.0.0.0:443        0.0.0.0:*    users:(("xray",pid=812,fd=7))'
+    confirm_critical() { echo "CONFIRM-PROMPT" >&2; return 1; }
+
+    run _ufw_fix_enable
+    [[ "$output" == *"CONFIRM-PROMPT"* && "$output" != *"tcp/443"* ]]
+
+    printf 'DEFAULT_INPUT_POLICY="DROP"\n' > "$DISTRO_UFW_DEFAULTS"
+    run _ufw_fix_enable
+    [[ "$output" == *"tcp/443 (xray)"*"CONFIRM-PROMPT"* ]]
+}
+
+@test "enable: sockets that cannot be listed are said before the confirmation" {
+    i18n_load en_US
+    _vpssec_stub ss 1
+    confirm_critical() { echo "CONFIRM-PROMPT" >&2; return 1; }
+
+    run _ufw_fix_enable
+    [[ "$output" == *"Listening sockets could not be listed"*"CONFIRM-PROMPT"* ]]
 }
 
 @test "enable: declining removes every rule the fix added" {
@@ -331,7 +437,31 @@ _call_at() {
 # ufw.set_default_deny — the other way to cut the session
 # ==============================================================================
 
+@test "default deny: public listeners no rule lets in are named before its own confirmation" {
+    # As ufw.enable: an active ufw with incoming allow is what a deny flip cuts.
+    i18n_load en_US
+    _ufw_active
+    _ss_says 'tcp   LISTEN 0      4096         0.0.0.0:443        0.0.0.0:*    users:(("xray",pid=812,fd=7))'
+    confirm_critical() { echo "CONFIRM-PROMPT $1" >&2; return 1; }
+
+    run _ufw_fix_default_deny
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"incoming traffic is denied"*"tcp/443 (xray)"*"CONFIRM-PROMPT Switch incoming traffic to deny?"* ]]
+}
+
+@test "default deny: declining keeps the policy and removes the rules it added" {
+    _ufw_active
+    confirm_critical() { return 1; }
+
+    run _ufw_fix_default_deny
+    [ "$status" -eq 1 ]
+    [ "$(cat "$ufw_policy")" = allow ]
+    [ ! -s "$UFW_USER_RULES" ]
+    _vpssec_refute _vpssec_stub_called ufw 'default deny'
+}
+
 @test "default deny: the SSH rule is added before the policy flips" {
+    confirm_critical() { return 0; }
     _ufw_active
     run _ufw_fix_default_deny
     [ "$status" -eq 0 ]
@@ -345,6 +475,7 @@ _call_at() {
 }
 
 @test "default deny: a refused SSH rule aborts before the policy flips" {
+    confirm_critical() { return 0; }
     _ufw_working 22
 
     _ufw_active
@@ -354,6 +485,7 @@ _call_at() {
 }
 
 @test "default deny: every sshd port is covered, not just the first" {
+    confirm_critical() { return 0; }
     _sshd_ports 22 2222
 
     _ufw_active
@@ -364,6 +496,7 @@ _call_at() {
 }
 
 @test "default deny: an already-allowed port is not re-added" {
+    confirm_critical() { return 0; }
     _tuple allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in
 
     _ufw_active
@@ -374,6 +507,7 @@ _call_at() {
 }
 
 @test "default deny: an outbound rule on the SSH port is not inbound coverage" {
+    confirm_critical() { return 0; }
     # `ufw allow out 22/tcp` once let this fix skip the inbound rule and flip
     # straight to deny, cutting the next login.
     _tuple allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 out
@@ -389,6 +523,7 @@ _call_at() {
 }
 
 @test "default deny and enable: a LIMIT rule covers its port and is kept" {
+    confirm_critical() { return 0; }
     # `ufw allow` on a LIMIT port rewrites the rule into a plain ALLOW, and
     # the rate limit disappears without a word.
     _tuple limit tcp 22 0.0.0.0/0 any 0.0.0.0/0 in
@@ -403,6 +538,7 @@ _call_at() {
 }
 
 @test "default deny: a rule confined to an interface still gets a rule open to anywhere" {
+    confirm_critical() { return 0; }
     # The operator may be connected over the public address right now; the
     # interface rule does not cover that path, and the deny would.
     _tuple allow any any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0
@@ -414,6 +550,7 @@ _call_at() {
 }
 
 @test "default deny: the command that restores the old policy is printed and logged" {
+    confirm_critical() { return 0; }
     i18n_load en_US
     VPSSEC_QUIET_SCAN=0
 
@@ -426,6 +563,7 @@ _call_at() {
 }
 
 @test "default deny: outgoing traffic is left allowed" {
+    confirm_critical() { return 0; }
     # Denying incoming without restoring allow-outgoing would break every
     # outbound connection on the host.
     _ufw_active
@@ -435,6 +573,7 @@ _call_at() {
 }
 
 @test "default deny: a refused policy change is reported as failure" {
+    confirm_critical() { return 0; }
     _ufw_refuses default
 
     _ufw_active

@@ -236,9 +236,46 @@ _reach() {
     [ "$(_reach 'server { listen 80; location ~ ^/$ { location ~ / { add_header X-A 1; } } }')" = own ]
 }
 
-@test "reach: a regex awk cannot read as PCRE does is taken to match" {
-    # A lookahead is PCRE only, and nginx matches / with this one.
-    [ "$(_reach 'server { listen 80; location / { } location ~ ^/(?!api/) { add_header Cache-Control no-cache; } }')" = own ]
+@test "reach: a regex awk cannot read, that would keep the headers out, is no verdict" {
+    # A lookahead is PCRE only; nginx matches / with this one, awk cannot say.
+    _dump_http 'server { listen 80; location / { } location ~ ^/(?!api/) { add_header Cache-Control no-cache; } }'
+    nginx_dump_reset
+    nginx_dump_load
+    [ "$(_webapp_nginx_header_targets)" = "unchecked	80	regex" ]
+    # One that would keep nothing out needs no verdict.
+    [ "$(_reach 'server { listen 80; location ~ ^/(?!api/) { } }')" = - ]
+}
+
+@test "reach: a regex whose literal start is not the start of / cannot serve it" {
+    # Proxy-agent's subscription location on the second proxy host.
+    [ "$(_reach 'server { listen 80; location ~ "^/s/(?<paSubKey>[0-9a-f]{32})$" { add_header X-A 1; } }')" = - ]
+    # A quantifier may drop the last literal; a group's | stays inside the group;
+    # a | outside any group lets a branch begin anywhere.
+    [ "$(_reach 'server { listen 80; location ~ ^/s?$ { add_header X-A 1; } }')" = own ]
+    [ "$(_reach 'server { listen 80; location ~ ^/(a|b) { add_header X-A 1; } }')" = - ]
+    [ "$(_reach 'server { listen 80; location ~ ^/api|^/$ { add_header X-A 1; } }')" = own ]
+    [ "$(_reach 'server { listen 80; location ~ ^/a\.(?:css|js) { add_header X-A 1; } }')" = - ]
+}
+
+@test "headers: a site no verdict reaches is named apart, and the fix still offered" {
+    _dump_http 'server { listen 80; server_name a.example; }
+server { listen 80; server_name b.example; location ~ ^/(?!api/) { add_header Cache-Control no-cache; } }'
+    _answer 'http://a.example/' 0 'HTTP/1.1 200 OK'
+    _audit_nginx
+    [ "$(_field webapp.nginx_security_headers fix_id)" = webapp.nginx_security_headers ]
+    [[ "$(_desc webapp.nginx_security_headers)" == "http://a.example/: "* ]]
+    [ "$(_desc webapp.nginx_security_headers_not_checked)" = "b.example: $(i18n 'webapp.headers_unchecked_regex')" ]
+}
+
+@test "headers: two servers by one name are told apart by their address" {
+    # Proxy-agent's fallback pair, both behind proxy_protocol on loopback.
+    _dump_http 'server { listen 127.0.0.1:31300 proxy_protocol; server_name example.com; }
+server { listen 127.0.0.1:31302 proxy_protocol; server_name example.com; }
+server { listen 127.0.0.1:31305 proxy_protocol; server_name other.example; }'
+    _audit_nginx
+    local why
+    why=$(i18n 'webapp.headers_unchecked_listen')
+    [ "$(_desc webapp.nginx_security_headers_not_checked)" = "example.com (127.0.0.1:31300): $why; example.com (127.0.0.1:31302): $why; other.example: $why" ]
 }
 
 @test "reach: add_header_inherit merge hands it past a level's own, off cuts it" {
@@ -294,7 +331,8 @@ server { listen 80; server_name _; }'
     _answer 'http://127.0.0.1/' 0 'HTTP/1.1 200 OK'
     _audit_nginx
     [ "$(_desc webapp.nginx_security_headers)" = "http://127.0.0.1/: Referrer-Policy, X-Content-Type-Options, X-Frame-Options, X-XSS-Protection" ]
-    [ "$(_desc webapp.nginx_security_headers_not_checked)" = "_: no server_name to request it by, and not the default server of its port" ]
+    # Two servers are named _: the one left out carries its address too.
+    [ "$(_desc webapp.nginx_security_headers_not_checked)" = "_ (80): no server_name to request it by, and not the default server of its port" ]
 }
 
 @test "headers: with no default_server, the first server on a port is its default" {

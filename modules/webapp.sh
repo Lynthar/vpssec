@@ -297,16 +297,43 @@ _webapp_nginx_header_targets() {
             if (!passes((c in hdr), m)) BLOCK = 1
             return m
         }
+        # The literal text a regex anchored by ^ must begin with: up to its first
+        # metacharacter, less a last character a quantifier may drop. "" when it is
+        # not anchored or an alternation outside any group lets a branch begin anywhere.
+        function lead(re,   i, n, c, out, depth, cls) {
+            if (substr(re, 1, 1) != "^") return ""
+            n = length(re); depth = cls = 0
+            for (i = 2; i <= n; i++) {
+                c = substr(re, i, 1)
+                if (c == "\\") { i++; continue }
+                if (cls) { if (c == "]") cls = 0; continue }
+                if (c == "[") cls = 1
+                else if (c == "(") depth++
+                else if (c == ")") depth--
+                else if (c == "|" && !depth) return ""
+            }
+            out = ""
+            for (i = 2; i <= n; i++) {
+                c = substr(re, i, 1)
+                if (index(".[]()*+?{}|\\$^", c)) break
+                out = out c
+            }
+            if (i <= n && index("*?{", c)) out = substr(out, 1, length(out) - 1)
+            return out
+        }
         # Does regex location re match "/"? 2 = cannot tell: awk reads PCRE the same
-        # way only without (?, \ before a letter or digit, braces, stacked quantifiers or empty |.
-        function rx(re) {
+        # way only without (?, \ before a letter or digit, braces, stacked quantifiers or
+        # empty |. A literal start "/" does not begin with rules it out first.
+        function rx(re,   p) {
+            p = lead(re)
+            if (p != "" && index("/", p) != 1) return 0
             if (re ~ /\(\?|\\[[:alnum:]]|[{}]|[*+?][*+]|\(\)|\(\||\|\)|^\||\|$|\|\|/) return 2
             return "/" ~ re
         }
-        # The locations under p (0 = the server) that may serve "/", as nginx picks:
-        # "= /" ends it; a prefix "/" is taken and its own locations searched, then,
-        # unless it is ^~, regexes in order. 1 when the pick is certain.
-        function slash(s, p, m,   k, c, e, pre, r) {
+        # The locations under p (0 = the server) that may serve "/", as nginx picks: "= /"
+        # ends it; a prefix "/" is taken and searched, then, unless ^~, regexes in order.
+        # 1 when the pick is certain; an unreadable regex that would block sets UNSURE.
+        function slash(s, p, m,   k, c, e, pre, r, b) {
             e = pre = 0
             for (k = 1; k <= nk[s, p]; k++) {
                 c = kid[s, p, k]
@@ -323,8 +350,10 @@ _webapp_nginx_header_targets() {
                 c = kid[s, p, k]
                 if (mod[c] != "~" && mod[c] != "~*") continue
                 if (!(r = rx(uri[c]))) continue
+                b = BLOCK
                 slash(s, c, level(c, m))
                 if (r == 1) return 1
+                if (BLOCK && !b) { UNSURE = 1; BLOCK = 0 }
             }
             return 0
         }
@@ -350,6 +379,7 @@ _webapp_nginx_header_targets() {
             # socket, else to the first server that listens there.
             for (s = 1; s <= last; s++) {
                 if (!(s in seen)) continue
+                split(names[s], w, " "); ++named[w[1]]
                 if (!nl[s]) L[s, ++nl[s]] = "80"
                 for (i = 1; i <= nl[s]; i++) {
                     n = split(L[s, i], w, " ")
@@ -378,7 +408,10 @@ _webapp_nginx_header_targets() {
                     if (label == "") label = w[j]
                     if (name == "" && w[j] != "_" && w[j] !~ /^~/ && w[j] !~ /\*/) { name = w[j]; sub(/^\./, "", name) }
                 }
-                if (label == "") { split(L[s, 1], w, " "); label = w[1] }
+                split(L[s, 1], w, " ")
+                if (label == "") label = w[1]
+                # Two servers by one name (a fallback pair on two ports) by their address too.
+                else if (named[label] > 1) label = label " (" w[1] ")"
                 if (!best) { print "unchecked\t" label "\tlisten"; continue }
                 addr = (bA ~ /:/) ? "[" bA "]" : bA
                 if (name == "") {
@@ -388,8 +421,9 @@ _webapp_nginx_header_targets() {
                     host = name; resolve = name ":" bP ":" addr
                 }
                 mode = (s in sinh) ? sinh[s] : (top != "" ? top : "on")
-                BLOCK = !passes((s in own), mode)
+                BLOCK = !passes((s in own), mode); UNSURE = 0
                 slash(s, 0, mode)
+                if (UNSURE && !BLOCK) { print "unchecked\t" label "\tregex"; continue }
                 print "url\t" (bT ? "https" : "http") "://" host (bP == (bT ? "443" : "80") ? "" : ":" bP) "/\t" resolve "\t" (BLOCK ? "own" : "-")
             }
         }
@@ -1081,6 +1115,99 @@ _webapp_backup_files() {
     return "$cut"
 }
 
+# nginx2root (2026-11-18): five nginx flaws, each a way to run code as a worker
+# behind a configuration feature. nginx fixed all five in 1.31.9 and 1.30.7, per
+# its security advisories; the rows are CVE, first affected release, feature.
+declare -ga WEBAPP_NGINX2ROOT_CVES=(
+    "CVE-2026-123007 1.9.5 http2"
+    "CVE-2026-123633 1.19.7 http2_proxy"
+    "CVE-2026-121810 1.25.0 http3"
+    "CVE-2026-123634 0.6.18 subrequest"
+    "CVE-2026-113425 0.5.33 mail"
+)
+declare -gA WEBAPP_NGINX2ROOT_FIXED=([1.31]=9 [1.30]=7)
+
+# True when nginx version $1 ("1.31.8", "1.26.3") is upstream-older than the fix:
+# a maintained branch before its fixed release, or any older branch at all.
+_webapp_nginx2root_affected() {
+    [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+    local major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]}
+    local fixed="${WEBAPP_NGINX2ROOT_FIXED[$major.$minor]:-}"
+    [[ -n "$fixed" ]] && return $(( patch < fixed ? 0 : 1 ))
+    (( major < 1 || (major == 1 && minor < 31) ))
+}
+
+# The version the nginx on PATH reports; empty for a fork that numbers its own.
+_webapp_nginx_version() {
+    nginx -v 2>&1 | sed -n 's|^nginx version: nginx/\([0-9][0-9.]*\).*|\1|p'
+}
+
+# The nginx2root features NGINX_DUMP turns on, one per line: http2, http2_proxy
+# (with a backend behind it), http3, subrequest (a resolver, a proxy_pass naming
+# a variable, and a mirror or SSI subrequest) and mail (the mail proxy).
+_webapp_nginx2root_features() {
+    nginx_statements <<< "$NGINX_DUMP" | awk -F'\t' '
+        $2 ~ /^http(\/|$)/ {
+            if (($3 == "http2" && $4 == "on") || ($3 == "listen" && (" " $4 " ") ~ / http2 /)) h2 = 1
+            if ($3 == "listen" && (" " $4 " ") ~ / quic /) h3 = 1
+            if ($3 == "proxy_pass" || $3 == "grpc_pass") { up = 1; if (index($4, "$")) var = 1 }
+            if ($3 == "resolver") res = 1
+            if (($3 == "mirror" && $4 != "off") || ($3 == "ssi" && $4 == "on")) subreq = 1
+        }
+        $2 ~ /^mail(\/|$)/ { mail = 1 }
+        END {
+            if (h2) print "http2"
+            if (h2 && up) print "http2_proxy"
+            if (h3) print "http3"
+            if (res && var && subreq) print "subrequest"
+            if (mail) print "mail"
+        }'
+}
+
+# nginx in nginx2root's upstream range, with a feature one of its flaws needs, is
+# an unscored note: a distribution may have backported the fixes under the old
+# number. It names the CVEs that apply, how to confirm a backport, and stopgaps.
+_webapp_audit_nginx2root() {
+    local v
+    v=$(_webapp_nginx_version)
+    [[ -n "$v" ]] && _webapp_nginx2root_affected "$v" || return 0
+
+    local -a features=() cves=() stopgaps=()
+    mapfile -t features < <(_webapp_nginx2root_features)
+    local row cve first feature
+    for row in "${WEBAPP_NGINX2ROOT_CVES[@]}"; do
+        read -r cve first feature <<< "$row"
+        [[ " ${features[*]} " == *" $feature "* ]] || continue
+        [[ "$(printf '%s\n' "$first" "$v" | sort -V | head -1)" == "$first" ]] || continue
+        cves+=("$cve")
+        [[ " ${stopgaps[*]} " == *" ${feature%_proxy} "* ]] || stopgaps+=("${feature%_proxy}")
+    done
+    (( ${#cves[@]} )) || return 0
+
+    local joined confirm pkg hint list stop=""
+    printf -v joined '%s|' "${cves[@]#CVE-2026-}"
+    if pkg=$(file_package_verified "$(command_path nginx)") \
+       && hint=$(pkg_changelog_grep_hint "$pkg" "CVE-2026-(${joined%|})"); then
+        confirm=$(i18n 'webapp.nginx2root_confirm' "cmd=$hint")
+    else
+        confirm=$(i18n 'webapp.nginx2root_confirm_unknown')
+    fi
+    for feature in "${stopgaps[@]}"; do
+        case "$feature" in
+            http2) stop+="$(i18n 'webapp.nginx2root_stop_http2'); " ;;
+            http3) stop+="$(i18n 'webapp.nginx2root_stop_http3'); " ;;
+            subrequest) stop+="$(i18n 'webapp.nginx2root_stop_subrequest'); " ;;
+            mail) stop+="$(i18n 'webapp.nginx2root_stop_mail'); " ;;
+        esac
+    done
+    printf -v list '%s, ' "${cves[@]}"
+    check_emit "webapp.nginx2root" info failed \
+        title="$(i18n 'webapp.nginx2root')" \
+        desc="$(i18n 'webapp.nginx2root_desc' "version=$v" "cves=${list%, }" "confirm=$confirm")" \
+        suggestion="$(i18n 'webapp.nginx2root_fix' "stopgaps=${stop%; }")"
+    print_warn "$(i18n 'webapp.nginx2root')"
+}
+
 # --- Audit Function ---
 
 # The nginx half of the audit, against the NGINX_DUMP webapp_audit loaded.
@@ -1115,6 +1242,7 @@ _webapp_audit_nginx() {
                     listen) what=$(i18n 'webapp.headers_unchecked_listen') ;;
                     name) what=$(i18n 'webapp.headers_unchecked_name') ;;
                     budget) what=$(i18n 'webapp.headers_unchecked_budget') ;;
+                    regex) what=$(i18n 'webapp.headers_unchecked_regex') ;;
                     *) what=$(i18n 'webapp.headers_unchecked_failed' "rc=$what") ;;
                 esac
                 headers_unchecked+=("$where: $what") ;;
@@ -1155,6 +1283,8 @@ _webapp_audit_nginx() {
             desc="$dir_listing" \
             suggestion="$(i18n 'webapp.disable_autoindex')"
     fi
+
+    _webapp_audit_nginx2root
 
     # TLS checks only where nginx serves TLS: Debian 12 and Ubuntu 22.04 / 24.04
     # ship weak protocols at http{} level, which matters only to a server that
