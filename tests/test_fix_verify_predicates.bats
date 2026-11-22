@@ -333,6 +333,11 @@ fi
 echo "Sorry but the jail '\$2' does not exist"
 exit 255
 SH
+    # port=ssh resolves as /etc/services says, which a minimal image (CI's debian:12) lacks.
+    _vpssec_stub_script getent <<'SH'
+[[ "$1 $2" == "services ssh/tcp" ]] && { echo "ssh                   22/tcp"; exit 0; }
+exit 2
+SH
 }
 
 @test "fail2ban: a jail left with no action does not ban" {
