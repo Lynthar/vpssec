@@ -1,0 +1,12 @@
+# Mutation cases: tests/test_webapp_nginx_scope.bats against core/common.sh.
+# mutate-suite: core/common.sh tests/test_webapp_nginx_scope.bats
+#
+# nginx_listen, the listen parser in NGINX_AWK_LISTEN: a wildcard is asked on loopback.
+
+run_case "headers/v6-wildcard-asked-as-is" 1 \
+    '                A = (a == "::") ? "::1" : a' \
+    '                A = a'
+
+run_case "headers/v4-wildcard-asked-as-is" 1 \
+    '                A = (a == "*" || a == "localhost") ? "127.0.0.1" : a' \
+    '                A = a'

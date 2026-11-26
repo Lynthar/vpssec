@@ -225,3 +225,27 @@ _write_checks() {
     unset VPSSEC_SECURITY_LEVEL
     [ "$output" = "49" ]
 }
+
+# ---- fail2ban on a host SSH takes no password on ----------------------
+
+@test "calculate_score: no fail2ban check scores while SSH takes no password" {
+    # Its absence, a stopped service and an optional one under --strict alike.
+    _write_checks \
+        "ssh.root_login_disabled|low|passed" \
+        "fail2ban.ssh_key_only|info|passed" \
+        "fail2ban.not_installed|low|failed" \
+        "fail2ban.service_inactive|low|failed" \
+        "fail2ban.maxretry_high|low|failed"
+    export VPSSEC_SECURITY_LEVEL=strict
+    run calculate_score
+    unset VPSSEC_SECURITY_LEVEL
+    [ "$output" = "100" ]
+
+    # The same findings with password login on: absence and the stopped service count.
+    _write_checks \
+        "ssh.root_login_disabled|low|passed" \
+        "fail2ban.not_installed|low|failed" \
+        "fail2ban.service_inactive|low|failed"
+    run calculate_score
+    [ "$output" = "33" ]
+}

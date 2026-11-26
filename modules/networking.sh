@@ -200,6 +200,21 @@ _net_port_in() {
     return 1
 }
 
+# The kernel's ephemeral port range as "<low> <high>"; fails when it cannot be read.
+_net_ephemeral_range() {
+    local r
+    r=$(sysctl -n net.ipv4.ip_local_port_range 2>/dev/null) || return 1
+    [[ "$r" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+)[[:space:]]*$ ]] || return 1
+    printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
+
+# UDP ($1 proto) on port $2 inside range $3 (from _net_ephemeral_range, "" = unknown):
+# ss lists an unconnected outbound socket as a listener, but a service may bind there too.
+_net_udp_in_ephemeral() {
+    [[ "$1" == udp* && -n "$3" ]] || return 1
+    (( $2 >= ${3% *} && $2 <= ${3#* } ))
+}
+
 # Interfaces in promiscuous mode, excluding loopback and the virtual/bridge/
 # container families, for which it is the normal mode; fails when `ip` cannot
 # list links. veth pairs render as "vethXXXX@ifN": the @peer suffix is stripped.
@@ -248,8 +263,11 @@ _net_audit_listeners() {
     done <<< "$listeners"
 
     local ssh_ports=" $(get_ssh_ports | tr '\n' ' ')"
+    local ephemeral
+    ephemeral=$(_net_ephemeral_range) || ephemeral=""
     local dangerous=()  # known-bad ports on a public address
     local exposed=()    # any other non-whitelisted port/proc on one
+    local outbound=()   # UDP in the ephemeral range: listed, never scored
     local addr label
     while IFS=$'\t' read -r proto port addr proc pid; do
         # A port sshd listens on is SSH, wherever ssh.sh approved moving it.
@@ -259,6 +277,8 @@ _net_audit_listeners() {
         label=$(_net_listener_label "$proto" "$port" "$addr" "$proc")
         if _net_port_in "$port" "${NET_DANGEROUS_PUBLIC_PORTS[@]}"; then
             dangerous+=("$label")
+        elif _net_udp_in_ephemeral "$proto" "$port" "$ephemeral"; then
+            outbound+=("$label")
         elif ! _net_port_in "$port" "${NET_PUBLIC_PORTS_OK[@]}"; then
             exposed+=("$label")
         fi
@@ -280,6 +300,15 @@ _net_audit_listeners() {
             desc="$(i18n 'networking.public_listeners_present_desc' "list=${list% }")" \
             suggestion="$(i18n 'networking.public_listeners_present_suggestion')"
         print_severity "medium" "$(i18n 'networking.public_listeners_present' "count=${#exposed[@]}")"
+    fi
+
+    if (( ${#outbound[@]} > 0 )); then
+        local list; list=$(printf '%s ' "${outbound[@]}")
+        check_emit "networking.udp_ephemeral_sockets" info failed \
+            title="$(i18n 'networking.udp_ephemeral_sockets' "count=${#outbound[@]}")" \
+            desc="$(i18n 'networking.udp_ephemeral_sockets_desc' "list=${list% }" "range=${ephemeral/ /-}")" \
+            suggestion="$(i18n 'networking.udp_ephemeral_sockets_suggestion')"
+        print_info "$(i18n 'networking.udp_ephemeral_sockets' "count=${#outbound[@]}")"
     fi
 
     if (( ${#dangerous[@]} == 0 && ${#exposed[@]} == 0 )); then

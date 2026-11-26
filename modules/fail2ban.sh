@@ -346,8 +346,28 @@ _f2b_get_bantime() {
 
 # --- Fail2ban Audit ---
 
+# SSH takes no password from anyone: none for an ordinary user, and no Match block
+# sets a directive that could let one in. sshd that cannot answer counts as no.
+_f2b_ssh_key_only() {
+    if [[ "${VPSSEC_MODULE_LOADED[ssh]:-0}" != 1 ]]; then
+        module_load ssh || return 1
+    fi
+    _ssh_password_auth_disabled || return 1
+    local overrides
+    overrides=$(_ssh_match_overrides)
+    ! grep -qE $'^(PasswordAuthentication|KbdInteractiveAuthentication|AuthenticationMethods)\t' <<< "$overrides"
+}
+
 fail2ban_audit() {
     local module="fail2ban"
+
+    # Nothing to guess without a password: every check below is listed but none
+    # scores while this one is in checks.json (state.sh scored()).
+    if _f2b_ssh_key_only; then
+        check_emit "fail2ban.ssh_key_only" info passed \
+            desc="$(i18n 'fail2ban.ssh_key_only_desc')"
+        print_info "$(i18n 'fail2ban.ssh_key_only')"
+    fi
 
     # Check if fail2ban is installed
     print_item "$(i18n 'fail2ban.check_installed')"

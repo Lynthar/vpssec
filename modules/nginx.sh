@@ -213,6 +213,8 @@ nginx_audit() {
         return
     fi
 
+    _nginx_audit_listen_loaded
+
     # Check default server / catchall
     print_item "$(i18n 'nginx.check_default_server')"
     _nginx_audit_catchall
@@ -221,6 +223,60 @@ nginx_audit() {
     # Benchmark 5.2.1 and nginx's own DDoS-mitigation guidance.
     print_item "$(i18n 'nginx.check_dos_hardening')"
     _nginx_audit_dos_hardening
+}
+
+# TCP listen addresses in NGINX_DUMP nginx holds no socket for, "<address> (<server_name>)"
+# per line, each once. Fails when sockets cannot be listed or none in view is nginx's (not
+# running, or no root to see owners): then every listen would read as not loaded.
+_nginx_unloaded_listens() {
+    if [[ "${VPSSEC_MODULE_LOADED[networking]:-0}" != 1 ]]; then
+        module_load networking || return 1
+    fi
+    local listeners held
+    listeners=$(_net_list_listeners) || return 1
+    held=$(awk -F'\t' '$1 ~ /^tcp/ && $5 == "nginx" { print $3 "\t" $4 }' <<< "$listeners")
+    [[ -n "$held" ]] || return 1
+    nginx_statements <<< "$NGINX_DUMP" | HELD="$held" LC_ALL=C awk -F'\t' "$NGINX_AWK_LISTEN"'
+        BEGIN {
+            n = split(ENVIRON["HELD"], rows, "\n")
+            for (i = 1; i <= n; i++) {
+                split(rows[i], f, "\t")
+                if (f[1] == "*" || f[1] == "0.0.0.0") held["*:" f[2]] = 1
+                if (f[1] == "*" || f[1] == "::") held["[::]:" f[2]] = 1
+                held[(f[1] ~ /:/ ? "[" f[1] "]" : f[1]) ":" f[2]] = 1
+            }
+        }
+        $2 ~ /server$/ && $3 == "server_name" && !($1 in name) { split($4, w, " "); name[$1] = w[1] }
+        $2 ~ /server$/ && $3 == "listen" { srv[++nl] = $1; spec[nl] = $4 }
+        END {
+            for (i = 1; i <= nl; i++) {
+                n = split(spec[i], w, " "); udp = 0
+                for (j = 2; j <= n; j++) if (w[j] == "quic" || w[j] == "udp") udp = 1
+                if (udp || !nginx_listen(w[1]) || K ~ /^localhost:/) continue
+                # A wildcard socket on the port answers every address of its family.
+                wild = (A ~ /:/ ? "[::]:" : "*:") P
+                if ((K in held) || (wild in held) || seen[K]++) continue
+                print K (name[srv[i]] != "" ? " (" name[srv[i]] ")" : "")
+            }
+        }'
+}
+
+# One unscored finding: the checks below read the files, and here they say something
+# nginx has not loaded. Not judged when nginx's sockets cannot be seen.
+_nginx_audit_listen_loaded() {
+    local unloaded count list
+    if ! unloaded=$(_nginx_unloaded_listens); then
+        log_debug "nginx: its listening sockets could not be seen; loaded listens not compared"
+        return 0
+    fi
+    [[ -n "$unloaded" ]] || return 0
+    count=$(grep -c . <<< "$unloaded")
+    list=$(paste -sd ';' - <<< "$unloaded")
+    check_emit "nginx.listen_not_loaded" info failed \
+        title="$(i18n 'nginx.listen_not_loaded' "count=$count")" \
+        desc="$(i18n 'nginx.listen_not_loaded_desc' "list=${list//;/; }")" \
+        suggestion="$(i18n 'nginx.listen_not_loaded_fix')"
+    print_warn "$(i18n 'nginx.listen_not_loaded' "count=$count")"
 }
 
 _nginx_audit_catchall() {

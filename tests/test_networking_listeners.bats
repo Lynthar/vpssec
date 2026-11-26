@@ -64,3 +64,51 @@ _net_findings() {
     _net_audit_listeners
     [[ "$(_net_findings)" == *"udp/2222 (python3)"* ]]
 }
+
+# ---- unconnected UDP on the ephemeral range (zoro: sing-box's outbound sockets) ------
+
+_ephemeral_range_is() { _vpssec_stub sysctl 0 "$(printf '%s\t%s' "$1" "$2")"; }
+
+_zoro_udp() {
+    _ss_says \
+        'udp   UNCONN 0      0            0.0.0.0:11923      0.0.0.0:*    users:(("sing-box",pid=700,fd=9))' \
+        'udp   UNCONN 0      0            0.0.0.0:52391      0.0.0.0:*    users:(("sing-box",pid=700,fd=12))' \
+        'udp   UNCONN 0      0            0.0.0.0:34181      0.0.0.0:*'
+}
+
+_desc_of() { jq -r --arg id "$1" '.[] | select(.id == $id) | .desc' "$VPSSEC_STATE/checks.json"; }
+
+@test "listeners: UDP on an ephemeral port is listed apart and unscored, the inbound stays medium" {
+    _ephemeral_range_is 32768 60999
+    _zoro_udp
+    _net_audit_listeners
+    [ "$(_desc_of networking.public_listeners_present)" = "Listening on a wildcard or public address (whether the host firewall lets it through is not checked here): udp/11923 (sing-box)" ]
+    local note; note=$(_desc_of networking.udp_ephemeral_sockets)
+    [[ "$note" == *"(32768-60999): udp/52391 (sing-box) udp/34181."* ]]
+    [ "${CHECK_SCORE_CATEGORY[networking.udp_ephemeral_sockets]}" = "info" ]
+}
+
+@test "listeners: only TCP, or a port outside the range, is a listener whatever its number" {
+    _ephemeral_range_is 32768 60999
+    _ss_says \
+        'tcp   LISTEN 0      4096         0.0.0.0:40000      0.0.0.0:*    users:(("xray",pid=812,fd=7))' \
+        'udp   UNCONN 0      0            0.0.0.0:61000      0.0.0.0:*    users:(("wg",pid=0,fd=0))'
+    _net_audit_listeners
+    [[ "$(_desc_of networking.public_listeners_present)" == *"tcp/40000 (xray) udp/61000 (wg)" ]]
+    [ -z "$(_desc_of networking.udp_ephemeral_sockets)" ]
+}
+
+@test "listeners: an unreadable ephemeral range keeps every UDP socket a listener" {
+    _vpssec_stub sysctl 1
+    _zoro_udp
+    _net_audit_listeners
+    [[ "$(_desc_of networking.public_listeners_present)" == *"udp/11923 (sing-box) udp/52391 (sing-box) udp/34181" ]]
+    [ -z "$(_desc_of networking.udp_ephemeral_sockets)" ]
+}
+
+@test "listeners: ephemeral UDP alone still passes the listener check" {
+    _ephemeral_range_is 32768 60999
+    _ss_says 'udp   UNCONN 0      0            0.0.0.0:52391      0.0.0.0:*    users:(("sing-box",pid=700,fd=12))'
+    _net_audit_listeners
+    [ "$(jq -r '[.[] | "\(.id) \(.status)"] | join(",")' "$VPSSEC_STATE/checks.json")" = "networking.udp_ephemeral_sockets failed,networking.listeners_ok passed" ]
+}

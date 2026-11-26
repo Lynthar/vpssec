@@ -530,22 +530,25 @@ _ufw_input_policy_drops() {
     [[ "$(fw_ufw_default DEFAULT_INPUT_POLICY)" != ACCEPT ]]
 }
 
-# Public listeners no inbound rule admits, a label per line: what a deny policy cuts off;
-# fails when sockets cannot be listed. Not the DHCP client ports before.rules admits, nor
-# docker-proxy, whose published ports are DNAT-forwarded past ufw's input chain.
+# Public listeners no inbound rule admits, "<kind>\t<label>" per line; fails when sockets cannot
+# be listed. kind is cut, or ephemeral for UDP in the ephemeral range (likely outbound). Not the
+# DHCP client ports before.rules admits, nor docker-proxy (DNAT-forwarded past ufw's input chain).
 _ufw_unadmitted_listeners() {
     if [[ "${VPSSEC_MODULE_LOADED[networking]:-0}" != 1 ]]; then
         module_load networking || return 1
     fi
-    local listeners
+    local listeners ephemeral
     listeners=$(_net_list_listeners) || return 1
+    ephemeral=$(_net_ephemeral_range) || ephemeral=""
 
-    local proto port addr proc pid
+    local proto port addr proc pid kind
     while IFS=$'\t' read -r proto port addr proc pid; do
         [[ "${proto%6}/$port" == udp/68 || "${proto%6}/$port" == udp/546 ]] && continue
         [[ "$proc" == docker-proxy ]] && continue
         _ufw_admits_port "$port" any "${proto%6}" && continue
-        _net_listener_label "$proto" "$port" "$addr" "$proc"
+        kind="cut"
+        _net_udp_in_ephemeral "$proto" "$port" "$ephemeral" && kind=ephemeral
+        printf '%s\t%s\n' "$kind" "$(_net_listener_label "$proto" "$port" "$addr" "$proc")"
     done < <(_net_public_listeners <<< "$listeners")
 }
 
@@ -554,9 +557,22 @@ _ufw_unadmitted_listeners() {
 _ufw_say_cut_off() {
     if (( $2 )); then
         tty_warn "$(i18n 'ufw.listeners_unknown')"
-    elif [[ -n "$1" ]]; then
+        return
+    fi
+    local line cut="" ephemeral=""
+    while IFS= read -r line; do
+        case "$line" in
+            cut$'\t'*)       cut+="  ${line#*$'\t'}"$'\n' ;;
+            ephemeral$'\t'*) ephemeral+="  ${line#*$'\t'}"$'\n' ;;
+        esac
+    done <<< "$1"
+    if [[ -n "$cut" ]]; then
         tty_warn "$(i18n 'ufw.listeners_cut_off')"
-        sed 's/^/  /' <<< "$1" | tty_out
+        printf '%s' "$cut" | tty_out
+    fi
+    if [[ -n "$ephemeral" ]]; then
+        tty_warn "$(i18n 'ufw.listeners_ephemeral')"
+        printf '%s' "$ephemeral" | tty_out
     fi
 }
 

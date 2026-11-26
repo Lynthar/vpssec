@@ -1,0 +1,20 @@
+# Mutation cases: tests/test_fail2ban_audit.bats against modules/fail2ban.sh.
+# mutate-suite: modules/fail2ban.sh tests/test_fail2ban_audit.bats
+#
+# When SSH takes no password the fail2ban audit says so, and only then.
+
+run_case "keyonly/password-ignored" 1 \
+    '    _ssh_password_auth_disabled || return 1' \
+    '    :'
+
+run_case "keyonly/match-ignored" 1 \
+    "    ! grep -qE \$'^(PasswordAuthentication|KbdInteractiveAuthentication|AuthenticationMethods)\\t' <<< \"\$overrides\"" \
+    '    true'
+
+run_case "keyonly/match-kbdint-ignored" 1 \
+    "    ! grep -qE \$'^(PasswordAuthentication|KbdInteractiveAuthentication|AuthenticationMethods)\\t' <<< \"\$overrides\"" \
+    "    ! grep -qE \$'^(PasswordAuthentication|AuthenticationMethods)\\t' <<< \"\$overrides\""
+
+run_case "keyonly/never-said" 1 \
+    '    if _f2b_ssh_key_only; then' \
+    '    if false; then'

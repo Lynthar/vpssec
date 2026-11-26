@@ -87,15 +87,15 @@ no); `--yes` and `--json-only` always write them.
 
 ## What it checks
 
-`vpssec audit` runs 366 checks across 21 modules:
+`vpssec audit` runs 369 checks across 21 modules:
 
 | Area | Checks | What it covers |
 |---|---|---|
 | System and kernel | 86 | `sysctl` network and memory settings and whether they survive a reboot, mount options, world-writable and SUID files, unattended upgrades, time sync, cron and `at` access |
 | SSH and accounts | 75 | sshd config end to end, key vs password auth, root login, empty passwords, sudo rules, stale accounts, password aging |
 | Containers and web apps | 61 | Docker daemon exposure, privileged and `--net=host` containers, socket permissions, nginx TLS and headers, exposed admin paths |
-| Detection and logging | 54 | fail2ban jails, rootkit and suspicious-binary scans, journald retention, log permissions, whether anything would actually alert you |
-| Network and firewall | 47 | UFW rules and default policy, listening sockets vs what you meant to expose, nginx reverse-proxy exposure, cloudflared tunnels |
+| Detection and logging | 55 | fail2ban jails, rootkit and suspicious-binary scans, journald retention, log permissions, whether anything would actually alert you |
+| Network and firewall | 49 | UFW rules and default policy, listening sockets vs what you meant to expose, nginx reverse-proxy exposure, cloudflared tunnels |
 | Baseline and ops | 43 | drift from the last run, cloud-init and provider metadata exposure, backup presence, dependency preflight |
 
 **vpssec can apply 50 fixes**, graded by how much impact they can have: 25

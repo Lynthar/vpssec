@@ -1,0 +1,42 @@
+# Mutation cases: tests/test_nginx_listen_loaded.bats against modules/nginx.sh.
+# mutate-suite: modules/nginx.sh tests/test_nginx_listen_loaded.bats
+#
+# Which listen addresses in the config nginx holds no socket for.
+
+run_case "audit/not-asked" 1 \
+    '    _nginx_audit_listen_loaded' \
+    '    :'
+
+# Without the owner, xray's socket reads as nginx's, and a socket nobody can see
+# the owner of (no root) makes the comparison run with nothing held.
+run_case "held/any-owner" 1 \
+    "    held=\$(awk -F'\\t' '\$1 ~ /^tcp/ && \$5 == \"nginx\" { print \$3 \"\\t\" \$4 }' <<< \"\$listeners\")" \
+    "    held=\$(awk -F'\\t' '\$1 ~ /^tcp/ { print \$3 \"\\t\" \$4 }' <<< \"\$listeners\")"
+
+run_case "held/nothing-judged-anyway" 1 \
+    '    [[ -n "$held" ]] || return 1' \
+    '    :'
+
+run_case "held/dual-stack-misses-v6" 1 \
+    '                if (f[1] == "*" || f[1] == "::") held["[::]:" f[2]] = 1' \
+    '                if (f[1] == "::") held["[::]:" f[2]] = 1'
+
+run_case "listen/stream-skipped" 1 \
+    '        $2 ~ /server$/ && $3 == "listen" { srv[++nl] = $1; spec[nl] = $4 }' \
+    '        $2 == "http/server" && $3 == "listen" { srv[++nl] = $1; spec[nl] = $4 }'
+
+run_case "listen/udp-compared" 1 \
+    '                for (j = 2; j <= n; j++) if (w[j] == "quic" || w[j] == "udp") udp = 1' \
+    '                for (j = 2; j <= n; j++) if (w[j] == "quic") udp = 1'
+
+run_case "listen/quic-compared" 1 \
+    '                for (j = 2; j <= n; j++) if (w[j] == "quic" || w[j] == "udp") udp = 1' \
+    '                for (j = 2; j <= n; j++) if (w[j] == "udp") udp = 1'
+
+run_case "listen/wildcard-not-counted" 1 \
+    '                if ((K in held) || (wild in held) || seen[K]++) continue' \
+    '                if ((K in held) || seen[K]++) continue'
+
+run_case "listen/server-unnamed" 1 \
+    '                print K (name[srv[i]] != "" ? " (" name[srv[i]] ")" : "")' \
+    '                print K'

@@ -1,0 +1,16 @@
+# Mutation cases: tests/test_score.bats against core/state.sh.
+# mutate-suite: core/state.sh tests/test_score.bats
+#
+# fail2ban.ssh_key_only in checks.json takes every fail2ban.* check out of the score.
+
+run_case "keyonly/rule-dropped" 1 \
+    '  | if   $ctx.ssh_key_only and ($id | startswith("fail2ban.")) then false' \
+    '  | if   false then false'
+
+run_case "keyonly/marker-unread" 1 \
+    '    ssh_key_only: any($all[]; .id == "fail2ban.ssh_key_only") };' \
+    '    ssh_key_only: false };'
+
+run_case "keyonly/always" 1 \
+    '  | if   $ctx.ssh_key_only and ($id | startswith("fail2ban.")) then false' \
+    '  | if   ($id | startswith("fail2ban.")) then false'

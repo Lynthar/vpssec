@@ -50,3 +50,54 @@ _desc() { jq -r '.[] | select(.id == "fail2ban.ssh_jail_not_banning") | .desc' "
     _f2b_audit_ssh_jail
     [[ "$(_desc)" == "The sshd jail runs, but its action nftables blocks only port ssh, and sshd listens on 22,35387. Its"* ]]
 }
+
+# ---- a host SSH takes no password on (DMIT LA: both paths off) ---------------
+
+# fail2ban absent, ssh.sh loaded as the engine's earlier ssh pass leaves it, sshd -T
+# answering from $1 written as sshd_config.
+_absent_under_sshd() {
+    # shellcheck source=/dev/null
+    source "$(_vpssec_repo_root)/modules/ssh.sh"
+    declare -gA VPSSEC_MODULE_LOADED=([ssh]=1)
+    SSH_CONFIG="$BATS_TEST_TMPDIR/sshd_config"
+    SSH_DROPIN_DIR="$BATS_TEST_TMPDIR/sshd_config.d"
+    printf '%b' "$1" > "$SSH_CONFIG"
+    _vpssec_stub_sshd_merging
+    _f2b_installed() { return 1; }
+    fail2ban_audit >/dev/null
+}
+
+_scored() { checks_with_scoring | jq -r '[.[] | "\(.id) \(.scored)"] | join(",")'; }
+
+@test "audit: with no SSH password, fail2ban findings are listed, fix offered, none scored" {
+    _absent_under_sshd 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n'
+    [ "$(_checks)" = "fail2ban.ssh_key_only passed ,fail2ban.not_installed failed fail2ban.install" ]
+    [ "$(_scored)" = "fail2ban.ssh_key_only false,fail2ban.not_installed false" ]
+}
+
+@test "audit: a password SSH takes, either way in, keeps fail2ban scored" {
+    _absent_under_sshd 'PasswordAuthentication yes\nKbdInteractiveAuthentication no\n'
+    [ "$(_scored)" = "fail2ban.not_installed true" ]
+
+    state_init
+    # keyboard-interactive through PAM asks pam_unix for the password.
+    _absent_under_sshd 'PasswordAuthentication no\nKbdInteractiveAuthentication yes\nUsePAM yes\n'
+    [ "$(_scored)" = "fail2ban.not_installed true" ]
+}
+
+@test "audit: a Match block that may let a password in keeps fail2ban scored" {
+    local d
+    for d in PasswordAuthentication KbdInteractiveAuthentication AuthenticationMethods; do
+        state_init
+        _absent_under_sshd "PasswordAuthentication no\nKbdInteractiveAuthentication no\nMatch Address 10.0.0.0/8\n    $d yes\n"
+        [ "$(_scored)" = "fail2ban.not_installed true" ] || { echo "$d" >&2; return 1; }
+    done
+}
+
+@test "audit: sshd that cannot report its config is not taken as key-only" {
+    _absent_under_sshd 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n'
+    state_init
+    _vpssec_stub sshd 255
+    fail2ban_audit >/dev/null
+    [ "$(_scored)" = "fail2ban.not_installed true" ]
+}

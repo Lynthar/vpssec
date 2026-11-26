@@ -423,6 +423,9 @@ declare -gA CHECK_SCORE_CATEGORY=(
     # passing, on purpose: the fix restores the score without adding to it.
     ["fail2ban.jails_active"]="info"
     ["fail2ban.no_jails_active"]="recommended"
+    # Emitted when SSH takes no password; while it is in checks.json no
+    # fail2ban.* check scores (state.sh scored()), whatever its category here.
+    ["fail2ban.ssh_key_only"]="info"
 
     # === Update Module - required ===
     ["update.apt_available"]="required"
@@ -481,6 +484,7 @@ declare -gA CHECK_SCORE_CATEGORY=(
     # === Nginx Module - conditional (only if Nginx installed) ===
     ["nginx.not_installed"]="info"
     ["nginx.not_on_path"]="info"
+    ["nginx.listen_not_loaded"]="info"   # says what the audit read is not what runs
     ["nginx.catchall_exists"]="conditional"
     ["nginx.no_catchall"]="conditional"
     # DoS hardening (CIS NGINX 5.2.1 + nginx mitigation guide)
@@ -561,6 +565,7 @@ declare -gA CHECK_SCORE_CATEGORY=(
     ["networking.promiscuous_interface"]="required"
     ["networking.no_promisc"]="recommended"
     ["networking.listeners_unknown"]="info"      # not measured: no score either way
+    ["networking.udp_ephemeral_sockets"]="info"  # likely outbound, so never scored
     ["networking.promisc_unknown"]="info"        # not measured: no score either way
 
     # === Scheduling Module - recommended (Lynis SCHD-* cross-check) ===

@@ -139,7 +139,16 @@ run_case "enable/listeners-read-after-rescue" 1 \
     '    _ufw_say_cut_off "$(_ufw_unadmitted_listeners)" 0'
 
 run_case "listeners/unsaid" 1 \
-    "        sed 's/^/  /' <<< \"\$1\" | tty_out" \
+    "        printf '%s' \"\$cut\" | tty_out" \
+    '        :'
+
+# zoro: sing-box's outbound UDP named among the services the policy cuts off.
+run_case "listeners/ephemeral-as-cut" 1 \
+    '        _net_udp_in_ephemeral "$proto" "$port" "$ephemeral" && kind=ephemeral' \
+    '        :'
+
+run_case "listeners/ephemeral-unsaid" 1 \
+    "        printf '%s' \"\$ephemeral\" | tty_out" \
     '        :'
 
 run_case "enable/policy-ignored" 1 \

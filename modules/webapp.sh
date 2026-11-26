@@ -258,26 +258,7 @@ _webapp_nginx_server_tokens() {
 # or ->\t<own: http{}'s add_header may not reach its /, or ->", or "unchecked\t<name>\t<listen|name>"
 # for one this host cannot address. One with ssl_reject_handshake on serves no page.
 _webapp_nginx_header_targets() {
-    nginx_statements <<<"$NGINX_DUMP" | LC_ALL=C awk -F'\t' '
-        # A listen spec into A (address to connect to), P (port) and K (the
-        # socket it names); 0 when it is not a TCP address of this host.
-        function parse(spec,   i, a) {
-            if (spec ~ /^unix:/) return 0
-            if (spec ~ /^\[/) {
-                i = index(spec, "]"); a = substr(spec, 2, i - 2); P = substr(spec, i + 1)
-                P = (P ~ /^:/) ? substr(P, 2) : "80"
-                K = "[" a "]:" P
-                A = (a == "::") ? "::1" : a
-            } else {
-                if (spec ~ /^[0-9]+$/) { a = "*"; P = spec }
-                else if (i = index(spec, ":")) { a = substr(spec, 1, i - 1); P = substr(spec, i + 1) }
-                else { a = spec; P = "80" }
-                if (a == "0.0.0.0") a = "*"
-                K = a ":" P
-                A = (a == "*" || a == "localhost") ? "127.0.0.1" : a
-            }
-            return P ~ /^[0-9]+$/ && (A ~ /^[0-9.]+$/ || A ~ /:/)
-        }
+    nginx_statements <<<"$NGINX_DUMP" | LC_ALL=C awk -F'\t' "$NGINX_AWK_LISTEN"'
         # A location of server s with args a: its id ends path p, its parent is the one before.
         function loc(s, a, p,   n, w, id, up) {
             n = split(p, w, "/"); id = w[n]; up = (n > 1) ? w[n - 1] : 0
@@ -383,7 +364,7 @@ _webapp_nginx_header_targets() {
                 if (!nl[s]) L[s, ++nl[s]] = "80"
                 for (i = 1; i <= nl[s]; i++) {
                     n = split(L[s, i], w, " ")
-                    if (!parse(w[1])) continue
+                    if (!nginx_listen(w[1])) continue
                     if (!(K in first)) first[K] = s
                     for (j = 2; j <= n; j++) if (w[j] == "default_server" || w[j] == "default") dflt[K] = s
                 }
@@ -398,7 +379,7 @@ _webapp_nginx_header_targets() {
                         if (w[j] == "ssl") tls = 1
                         else if (w[j] == "quic" || w[j] == "proxy_protocol") bad = 1
                     }
-                    if (bad || !parse(w[1])) continue
+                    if (bad || !nginx_listen(w[1])) continue
                     score = (tls ? 2 : 0) + (A ~ /:/ ? 1 : 2)
                     if (score > best) { best = score; bA = A; bP = P; bK = K; bT = tls }
                 }
@@ -1243,6 +1224,7 @@ _webapp_audit_nginx() {
                     name) what=$(i18n 'webapp.headers_unchecked_name') ;;
                     budget) what=$(i18n 'webapp.headers_unchecked_budget') ;;
                     regex) what=$(i18n 'webapp.headers_unchecked_regex') ;;
+                    7) what=$(i18n 'webapp.headers_unchecked_refused') ;;
                     *) what=$(i18n 'webapp.headers_unchecked_failed' "rc=$what") ;;
                 esac
                 headers_unchecked+=("$where: $what") ;;

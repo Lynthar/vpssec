@@ -303,6 +303,26 @@ _call_at() {
     [[ "$output" != *"unreachable"* ]]
 }
 
+@test "enable: UDP on an ephemeral port is named apart, as likely outbound" {
+    # zoro: sing-box's outbound sockets; conntrack admits the replies to them.
+    i18n_load en_US
+    _vpssec_stub sysctl 0 "$(printf '32768\t60999')"
+    _ss_says \
+        'udp   UNCONN 0      0            0.0.0.0:11923      0.0.0.0:*    users:(("sing-box",pid=700,fd=9))' \
+        'udp   UNCONN 0      0            0.0.0.0:52391      0.0.0.0:*    users:(("sing-box",pid=700,fd=12))'
+    confirm_critical() { echo "CONFIRM-PROMPT" >&2; return 1; }
+
+    run _ufw_fix_enable
+    [[ "$output" == *"unreachable from outside"*"udp/11923 (sing-box)"*"ephemeral range"*"udp/52391 (sing-box)"*"CONFIRM-PROMPT"* ]]
+    [ "$(grep -c 'udp/52391' <<< "$output")" -eq 1 ]
+
+    # Nothing else unadmitted: the outbound line alone, no cut-off heading.
+    _ss_says 'udp   UNCONN 0      0            0.0.0.0:52391      0.0.0.0:*    users:(("sing-box",pid=700,fd=12))'
+    run _ufw_fix_enable
+    [[ "$output" == *"ephemeral range"*"udp/52391 (sing-box)"*"CONFIRM-PROMPT"* ]]
+    [[ "$output" != *"unreachable"* ]]
+}
+
 @test "enable: an ACCEPT input policy cuts nothing off, so nothing is named" {
     i18n_load en_US
     printf 'DEFAULT_INPUT_POLICY="DROP"\nDEFAULT_INPUT_POLICY="ACCEPT"\n#DEFAULT_INPUT_POLICY="DROP"\n' \

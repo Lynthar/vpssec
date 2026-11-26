@@ -69,13 +69,10 @@ run_case "unreadable/audit-complete" 1 \
 
 # ---- security headers: requests to each site --------------------------------------
 
-run_case "headers/v6-wildcard-asked-as-is" 1 \
-    '                A = (a == "::") ? "::1" : a' \
-    '                A = a'
-
-run_case "headers/v4-wildcard-asked-as-is" 1 \
-    '                A = (a == "*" || a == "localhost") ? "127.0.0.1" : a' \
-    '                A = a'
+# DMIT LA: a listen never reloaded, reported as a bare curl exit code.
+run_case "headers/refused-as-exit-code" 1 \
+    "                    7) what=\$(i18n 'webapp.headers_unchecked_refused') ;;" \
+    "                    7) what=\$(i18n 'webapp.headers_unchecked_failed' \"rc=\$what\") ;;"
 
 run_case "headers/tls-not-preferred" 1 \
     '                    score = (tls ? 2 : 0) + (A ~ /:/ ? 1 : 2)' \

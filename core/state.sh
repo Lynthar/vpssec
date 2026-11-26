@@ -497,19 +497,21 @@ def bucket:
 def present($arr; $p):
   any($arr[]; ((.id // "") | startswith($p + "."))
               and ((.id // "") != ($p + ".not_installed")));
-def installed($all):
-  { docker:      present($all; "docker"),
-    nginx:       present($all; "nginx"),
-    cloudflared: present($all; "cloudflared") };
+def context($all):
+  { docker:       present($all; "docker"),
+    nginx:        present($all; "nginx"),
+    cloudflared:  present($all; "cloudflared"),
+    ssh_key_only: any($all[]; .id == "fail2ban.ssh_key_only") };
 def category($catmap; $default_cat; $id): ($catmap[$id] // $default_cat);
-def scored($catmap; $default_cat; $installed; $strict; $id):
+def scored($catmap; $default_cat; $ctx; $strict; $id):
   category($catmap; $default_cat; $id) as $c
-  | if   $c == "required" or $c == "recommended" then true
+  | if   $ctx.ssh_key_only and ($id | startswith("fail2ban.")) then false
+    elif $c == "required" or $c == "recommended" then true
     elif $c == "conditional" then
       ($id | split(".") | .[0]) as $m
-      | if   $m == "docker"      then $installed.docker
-        elif $m == "nginx"       then $installed.nginx
-        elif $m == "cloudflared" then $installed.cloudflared
+      | if   $m == "docker"      then $ctx.docker
+        elif $m == "nginx"       then $ctx.nginx
+        elif $m == "cloudflared" then $ctx.cloudflared
         else true end
     elif $c == "optional" then $strict
     elif $c == "info"     then false
@@ -536,8 +538,8 @@ checks_with_scoring() {
         --arg     default_cat "$_SCORE_DEFAULT_CAT" \
         --argjson strict "$_SCORE_STRICT" \
         "$_VPSSEC_JQ_DEFS"'
-        installed(.) as $installed
-        | map(. + {scored: scored($catmap; $default_cat; $installed; $strict; (.id // ""))})
+        context(.) as $ctx
+        | map(. + {scored: scored($catmap; $default_cat; $ctx; $strict; (.id // ""))})
     '
 }
 
@@ -559,12 +561,12 @@ _check_metrics_refresh() {
             --arg     default_cat "$_SCORE_DEFAULT_CAT" \
             --argjson strict "$_SCORE_STRICT" "$_VPSSEC_JQ_DEFS"'
             [ .[] | select(((.id // "") | length) > 0) ] as $all
-            | installed($all) as $installed
+            | context($all) as $ctx
             | reduce $all[] as $chk (
                 {total:0, high:0, medium:0, low:0, passed:0, info:0,
                  scored_total:0, high_failed:0, medium_failed:0, low_failed:0};
                 ($chk | bucket) as $b
-                | (scored($catmap; $default_cat; $installed; $strict; $chk.id)) as $in
+                | (scored($catmap; $default_cat; $ctx; $strict; $chk.id)) as $in
                 | .total += 1
                 # info = carried in the report but not scored. A separate
                 # dimension: the check still falls into a severity bucket below.

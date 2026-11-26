@@ -1679,6 +1679,29 @@ nginx_dump_reset() {
     _NGINX_DUMP_STATE=""
 }
 
+# awk function nginx_listen(spec) to prepend to a program: a listen spec into A (address to
+# connect to), P (port) and K (the socket it names, "*:80" or "[::]:80" for a wildcard);
+# returns 0 when it is not a TCP address of this host (unix:, a hostname other than localhost).
+NGINX_AWK_LISTEN='
+        function nginx_listen(spec,   i, a) {
+            if (spec ~ /^unix:/) return 0
+            if (spec ~ /^\[/) {
+                i = index(spec, "]"); a = substr(spec, 2, i - 2); P = substr(spec, i + 1)
+                P = (P ~ /^:/) ? substr(P, 2) : "80"
+                K = "[" a "]:" P
+                A = (a == "::") ? "::1" : a
+            } else {
+                if (spec ~ /^[0-9]+$/) { a = "*"; P = spec }
+                else if (i = index(spec, ":")) { a = substr(spec, 1, i - 1); P = substr(spec, i + 1) }
+                else { a = spec; P = "80" }
+                if (a == "0.0.0.0") a = "*"
+                K = a ":" P
+                A = (a == "*" || a == "localhost") ? "127.0.0.1" : a
+            }
+            return P ~ /^[0-9]+$/ && (A ~ /^[0-9.]+$/ || A ~ /:/)
+        }
+'
+
 # `nginx -T` text on stdin -> "<server id>\t<context>\t<name>\t<args>" per directive, includes inlined,
 # server ids from 1 (0 = none), args unquoted. location{} and if{} get a line too, before their body;
 # a location and all inside it add "\t<location ids from 1, outermost first, /-joined>".

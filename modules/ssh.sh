@@ -767,7 +767,7 @@ _ssh_dropin_included() {
 # block sets. The audit reads the value an ordinary user gets (_ssh_get_config),
 # so these are the connections whose value it did not see.
 _ssh_match_overrides() {
-    local judged="PasswordAuthentication PermitRootLogin PubkeyAuthentication PermitEmptyPasswords MaxAuthTries AllowUsers AllowGroups DenyUsers DenyGroups"
+    local judged="PasswordAuthentication KbdInteractiveAuthentication AuthenticationMethods PermitRootLogin PubkeyAuthentication PermitEmptyPasswords MaxAuthTries AllowUsers AllowGroups DenyUsers DenyGroups"
     local row directive
     for row in "${SSH_DIRECTIVE_CHECKS[@]}"; do
         IFS='|' read -r _ directive _ <<< "$row"

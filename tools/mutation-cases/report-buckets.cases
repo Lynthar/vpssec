@@ -8,5 +8,5 @@ run_case "bucket/info-own-bucket" 1 \
     '  else "low" end;' \
     '  elif .severity == "low" then "low" else "info" end;'
 run_case "scored/flag-dropped" 1 \
-    '        | map(. + {scored: scored($catmap; $default_cat; $installed; $strict; (.id // ""))})' \
+    '        | map(. + {scored: scored($catmap; $default_cat; $ctx; $strict; (.id // ""))})' \
     '        | map(.)'

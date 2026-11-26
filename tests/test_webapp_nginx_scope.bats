@@ -404,6 +404,14 @@ server { listen 80; server_name a.example; }'
     _vpssec_refute grep -qxF webapp.nginx_security_headers <<<"$(_ids)"
 }
 
+@test "headers: a refused connection says nothing listens there, not a bare exit code" {
+    # DMIT LA: a server written into the config, never reloaded.
+    _dump_http 'server { listen 127.0.0.1:31305 ssl; server_name a.example; }'
+    _answer 'https://a.example:31305/' 7
+    _audit_nginx
+    [ "$(_desc webapp.nginx_security_headers_not_checked)" = "https://a.example:31305/: could not connect (curl exit code 7): nothing listens on this address, as when nginx has not reloaded a changed config" ]
+}
+
 @test "headers: sites past the time budget are not checked" {
     _dump_http 'server { listen 80; server_name a.example; }'
     WEBAPP_PROBE_BUDGET=0

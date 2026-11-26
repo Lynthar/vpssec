@@ -22,3 +22,24 @@ run_case "ssh/ports-not-read" 1 \
 run_case "proc/name-cut-at-quote" 1 \
     '        if _net_have_ss && [[ "$line" =~ users:\(\(\"(([^\"]|\"[^,])+)\",pid=([0-9]+) ]]; then' \
     '        if _net_have_ss && [[ "$line" =~ users:\(\(\"([^\"]+)\"(,pid=([0-9]+))? ]]; then'
+
+# zoro: sing-box's outbound UDP, on a port the kernel picked, scored as a listener.
+run_case "ephemeral/udp-scored" 1 \
+    '        elif _net_udp_in_ephemeral "$proto" "$port" "$ephemeral"; then' \
+    '        elif false; then'
+
+run_case "ephemeral/tcp-too" 1 \
+    '    [[ "$1" == udp* && -n "$3" ]] || return 1' \
+    '    [[ -n "$3" ]] || return 1'
+
+run_case "ephemeral/no-upper-bound" 1 \
+    '    (( $2 >= ${3% *} && $2 <= ${3#* } ))' \
+    '    (( $2 >= ${3% *} ))'
+
+run_case "ephemeral/unreadable-takes-all" 1 \
+    '    ephemeral=$(_net_ephemeral_range) || ephemeral=""' \
+    '    ephemeral=$(_net_ephemeral_range) || ephemeral="0 65535"'
+
+run_case "ephemeral/note-dropped" 1 \
+    '        check_emit "networking.udp_ephemeral_sockets" info failed \' \
+    '        : \'

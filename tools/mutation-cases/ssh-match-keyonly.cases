@@ -1,0 +1,8 @@
+# Mutation cases: tests/test_fail2ban_audit.bats against modules/ssh.sh.
+# mutate-suite: modules/ssh.sh tests/test_fail2ban_audit.bats
+#
+# The Match overrides fail2ban reads to tell whether SSH could take a password.
+
+run_case "match/kbdint-unjudged" 1 \
+    '    local judged="PasswordAuthentication KbdInteractiveAuthentication AuthenticationMethods PermitRootLogin PubkeyAuthentication PermitEmptyPasswords MaxAuthTries AllowUsers AllowGroups DenyUsers DenyGroups"' \
+    '    local judged="PasswordAuthentication PermitRootLogin PubkeyAuthentication PermitEmptyPasswords MaxAuthTries AllowUsers AllowGroups DenyUsers DenyGroups"'
